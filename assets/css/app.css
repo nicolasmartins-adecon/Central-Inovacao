@@ -743,8 +743,8 @@ table.tabela tbody tr:last-child td { border-bottom: 0; }
 
 .etapa {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: 18px 34px minmax(0, 1fr) auto;
+  gap: 10px;
   padding: 12px 16px 12px 10px;
   border-bottom: 1px solid var(--line-soft);
   position: relative;
@@ -780,6 +780,30 @@ table.tabela tbody tr:last-child td { border-bottom: 0; }
 .etapa.feita .etapa-desc { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
 .etapa-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .etapa-lado { display: flex; align-items: center; gap: 4px; }
+
+/* alça de reordenação */
+.etapa-puxador {
+  align-self: stretch; width: 18px;
+  display: grid; place-items: center;
+  background: none; border: 0; padding: 0;
+  color: var(--faint); cursor: grab;
+  opacity: .3; touch-action: none;
+  transition: opacity .14s ease, color .14s ease;
+}
+.etapa-puxador svg { width: 15px; height: 15px; }
+.etapa:hover .etapa-puxador { opacity: .75; }
+.etapa-puxador:hover { opacity: 1; color: var(--accent); }
+.etapa-puxador:active { cursor: grabbing; }
+
+.trilha.reordenando { user-select: none; }
+.trilha.reordenando .etapa { cursor: grabbing; }
+.etapa.movendo {
+  background: var(--panel-2);
+  box-shadow: inset 2px 0 0 var(--accent), var(--sombra);
+  border-radius: var(--r-sm);
+  opacity: .92;
+}
+.etapa.movendo .etapa-puxador { opacity: 1; color: var(--accent); }
 
 .sinal-com {
   display: inline-flex; align-items: center; gap: 4px;
