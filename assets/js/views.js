@@ -53,6 +53,72 @@ CI.views = (function () {
     return db.diretoria(id)?.nome || "Sem diretoria";
   }
 
+  /* ---- ações compartilhadas ---------------------------------------------
+     Uma ação é UMA linha no banco. `diretoria_id` é a diretoria responsável e
+     `diretorias_apoio` guarda as demais envolvidas. Ela aparece no quadro de
+     todas, mas os indicadores contam a linha — nunca as participações.
+     ---------------------------------------------------------------------- */
+
+  function diretoriasDe(reg) {
+    const ids = [];
+    if (reg && reg.diretoria_id) ids.push(reg.diretoria_id);
+    ((reg && reg.diretorias_apoio) || []).forEach(id => {
+      if (id && !ids.includes(id)) ids.push(id);
+    });
+    return ids;
+  }
+
+  const participa = (reg, dirId) => diretoriasDe(reg).includes(dirId);
+  const compartilhada = reg => diretoriasDe(reg).length > 1;
+
+  /** Siglas das outras diretorias envolvidas, para marcar o que é conjunto. */
+  function selosCompartilhado(reg, exceto) {
+    const outras = diretoriasDe(reg).filter(id => id !== exceto).map(id => db.diretoria(id)).filter(Boolean);
+    if (!outras.length) return null;
+    const mostrar = outras.slice(0, 4);
+    return h("span.selos",
+      h("span.selos-rot", "+"),
+      ...mostrar.map(d => h("span.selo", {
+        estilo: { background: U.corVisivel(d.cor), color: U.corTexto(d.cor) },
+        title: d.nome
+      }, d.sigla || d.nome.slice(0, 3))),
+      outras.length > mostrar.length ? h("span.selos-rot", `+${outras.length - mostrar.length}`) : null
+    );
+  }
+
+  /** Grade de botõezinhos para escolher as diretorias envolvidas. */
+  function seletorDiretorias(iniciais, principalInicial) {
+    let escolhidas = new Set((iniciais || []).filter(Boolean));
+    let principal = principalInicial;
+    const caixa = h("div.multi-dir");
+
+    function pintar() {
+      U.limpar(caixa);
+      db.dados.diretorias.forEach(d => {
+        const ehPrincipal = d.id === principal;
+        const ativa = ehPrincipal || escolhidas.has(d.id);
+        const b = h("button.dir-toggle" + (ativa ? ".ativa" : "") + (ehPrincipal ? ".principal" : ""), {
+          type: "button",
+          title: ehPrincipal ? `${d.nome} — responsável, sempre incluída` : d.nome,
+          estilo: ativa ? { "--tom": U.corVisivel(d.cor) } : {},
+          onclick: () => {
+            if (ehPrincipal) return;
+            escolhidas.has(d.id) ? escolhidas.delete(d.id) : escolhidas.add(d.id);
+            pintar();
+          }
+        }, h("i.ponto-dir", { estilo: { background: U.corVisivel(d.cor) } }), d.sigla || d.nome);
+        caixa.appendChild(b);
+      });
+    }
+    pintar();
+
+    return {
+      el: caixa,
+      sincronizar(novoPrincipal) { principal = novoPrincipal; escolhidas.delete(novoPrincipal); pintar(); },
+      valor() { return [...escolhidas].filter(id => id !== principal); }
+    };
+  }
+
   function chipPrazo(etapa) {
     if (etapa.concluida) return chip("Concluída", "ok");
     if (!etapa.data_entrega) return chip("Sem data");
@@ -218,16 +284,26 @@ CI.views = (function () {
     const porDiretoria = db.dados.diretorias
       .map(d => ({
         rotulo: d.nome,
-        valor: projetos.filter(p => p.diretoria_id === d.id).length,
+        valor: projetos.filter(p => participa(p, d.id)).length,
         tom: U.corVisivel(d.cor)
       }))
       .filter(d => d.valor > 0)
       .sort((a, b) => b.valor - a.valor);
 
+    const conjuntas = projetos.filter(compartilhada).length;
+
     const distribuicao = h("section.painel",
       h("div.painel-hd", h("h2", "Carga por diretoria"),
-        h("div.acoes", h("span.rotulo", "ações cadastradas"))),
-      h("div.painel-bd", barras(porDiretoria))
+        h("div.acoes", h("span.rotulo", "participações"))),
+      h("div.painel-bd",
+        barras(porDiretoria),
+        h("p.discreto", { estilo: { fontSize: "11.5px", marginTop: "12px", lineHeight: 1.55 } },
+          `${projetos.length} ações no total` +
+          (conjuntas ? `, sendo ${conjuntas} tocadas por mais de uma diretoria. ` +
+                       "A soma das barras é maior porque uma ação conjunta aparece em cada diretoria envolvida — " +
+                       "nos indicadores ela continua valendo uma."
+                     : "."))
+      )
     );
 
     /* movimentação */
@@ -307,7 +383,7 @@ CI.views = (function () {
     const listaAnos = [...anos].sort();
 
     let projetos = db.dados.projetos.filter(p => p.inicio || p.termino);
-    if (filtroCronoDir) projetos = projetos.filter(p => p.diretoria_id === filtroCronoDir);
+    if (filtroCronoDir) projetos = projetos.filter(p => participa(p, filtroCronoDir));
     projetos.sort((a, b) => {
       const pa = PRIORIDADES.indexOf(a.prioridade), pb = PRIORIDADES.indexOf(b.prioridade);
       if (pa !== pb) return pa - pb;
@@ -517,7 +593,7 @@ CI.views = (function () {
 
   function vProjetos() {
     let lista = db.dados.projetos.slice();
-    if (filtros.diretoria) lista = lista.filter(p => p.diretoria_id === filtros.diretoria);
+    if (filtros.diretoria) lista = lista.filter(p => participa(p, filtros.diretoria));
     if (filtros.tipo) lista = lista.filter(p => p.tipo === filtros.tipo);
     if (filtros.prioridade) lista = lista.filter(p => p.prioridade === filtros.prioridade);
     if (filtros.busca) {
@@ -585,6 +661,7 @@ CI.views = (function () {
       h("div.progresso", h("i", { estilo: { width: s.pct + "%", "--tom": cor } })),
       h("div.cartao-pe",
         h("span", nomeDiretoria(p.diretoria_id)),
+        selosCompartilhado(p, p.diretoria_id),
         h("span.direita", s.total ? `${s.feitas}/${s.total} etapas` : "sem etapas")
       )
     );
@@ -646,6 +723,22 @@ CI.views = (function () {
           )
         ),
         h("dl.vitais",
+          compartilhada(p)
+            ? h("div.vital",
+                h("dt", "Em conjunto"),
+                h("dd",
+                  h("div", { estilo: { display: "flex", flexWrap: "wrap", gap: "5px" } },
+                    ...diretoriasDe(p).map(id => {
+                      const dd = db.diretoria(id);
+                      return dd ? h("span.selo", {
+                        estilo: { background: U.corVisivel(dd.cor), color: U.corTexto(dd.cor) },
+                        title: dd.nome
+                      }, dd.sigla || dd.nome) : null;
+                    })),
+                  h("span.discreto", { estilo: { display: "block", fontSize: "11px", marginTop: "6px" } },
+                    "Aparece no quadro das " + diretoriasDe(p).length +
+                    " diretorias e conta uma vez só nos indicadores.")))
+            : null,
           vital("Objetivo", p.objetivo),
           vital("Equipe", p.equipe),
           vital("Responsável", p.responsavel),
@@ -1044,23 +1137,31 @@ CI.views = (function () {
      MODAIS DE CRIAÇÃO / EDIÇÃO
      ====================================================================== */
 
-  function modalProjeto(projeto) {
+  function modalProjeto(projeto, padroes) {
     const editando = Boolean(projeto);
-    const p = projeto || {
+    const p = projeto || Object.assign({
       nome: "", diretoria_id: db.dados.diretorias[0]?.id || null, tipo: "Projeto Interno",
       prioridade: "Média", status: "Planejado", objetivo: "", equipe: "", responsavel: "",
-      professor_apoiador: "", metodologia: "", inicio: "", termino: "", codigo: "", cor: ""
-    };
+      professor_apoiador: "", metodologia: "", inicio: "", termino: "", codigo: "", cor: "",
+      diretorias_apoio: []
+    }, padroes || {});
 
     const campos = {};
     const cp = (chave, rotulo, controle, dica) => { campos[chave] = controle; return campo(rotulo, controle, dica); };
+    const seletor = seletorDiretorias(p.diretorias_apoio || [], p.diretoria_id);
 
     const corpo = [
       cp("nome", "Nome do projeto", entrada({ value: p.nome, placeholder: "HACKADECON", required: true })),
       h("div.linha-campos",
-        cp("diretoria_id", "Diretoria", selecao(db.dados.diretorias.map(d => [d.id, d.nome]), { value: p.diretoria_id })),
+        cp("diretoria_id", "Diretoria responsável",
+           selecao(db.dados.diretorias.map(d => [d.id, d.nome]), {
+             value: p.diretoria_id,
+             onchange: e => seletor.sincronizar(e.target.value)
+           })),
         cp("tipo", "Classificação", selecao(TIPOS, { value: p.tipo }))
       ),
+      campo("Também é tocado por", seletor.el,
+            "Clique nas diretorias que participam. A ação aparece no quadro de todas e continua contando como uma só."),
       h("div.linha-campos",
         cp("prioridade", "Prioridade", selecao(PRIORIDADES, { value: p.prioridade })),
         cp("status", "Status", selecao(STATUS, { value: p.status })),
@@ -1093,6 +1194,7 @@ CI.views = (function () {
             const dados = {};
             for (const [k, el] of Object.entries(campos)) dados[k] = el.value || (k.match(/inicio|termino/) ? null : "");
             if (!dados.nome.trim()) { U.aviso("Dê um nome ao projeto.", "alerta"); campos.nome.focus(); return; }
+            dados.diretorias_apoio = seletor.valor();
             try {
               if (editando) {
                 await db.atualizar("projetos", p.id, dados);
@@ -1196,107 +1298,116 @@ CI.views = (function () {
           value: dirAberta, estilo: { width: "auto", minWidth: "200px" },
           onchange: e => { dirAberta = e.target.value; CI.app.recarregarVista(); }
         }),
-        h("span.discreto", { estilo: { fontSize: "12.5px", marginLeft: "auto" } },
-          "Cada coluna reproduz o levantamento feito com a diretoria.")
+        h("span.discreto", { estilo: { fontSize: "12.5px", marginLeft: "auto", textAlign: "right", maxWidth: "48ch" } },
+          "Uma ação tocada por várias diretorias aparece no quadro de cada uma, marcada como apoio, e conta uma vez só nos indicadores.")
       ),
       h("div", { estilo: { display: "flex", flexDirection: "column", gap: "14px" } },
         ...lista.map(quadroDiretoria))
     );
   }
 
-  function quadroDiretoria(d) {
-    const itens = db.dados.itens_diretoria.filter(i => i.diretoria_id === d.id);
-    const colunas = h("div.colunas");
+  /* Cada coluna do quadro vem das entidades de verdade: projetos (por tipo) e
+     implementações (ferramenta ou processo). Uma ação conjunta aparece aqui em
+     todas as diretorias envolvidas, mas existe uma única vez no banco. */
 
+  function itemDoQuadro(o) {
+    const el = h("div.item-quadro" + (o.apoio ? ".apoio" : ""), { estilo: { "--tom": o.tom } },
+      o.abrir
+        ? h("button.item-abrir", { type: "button", onclick: o.abrir }, o.titulo)
+        : h("span", { estilo: { fontWeight: 500 } }, o.titulo),
+      o.selos || null,
+      o.sub ? h("span.quem", o.sub) : null,
+      o.apoio ? h("span.quem", { estilo: { color: "var(--faint)" } }, "apoio · lidera " + o.lidera) : null,
+      o.remover
+        ? h("button.remover", { type: "button", "aria-label": "Remover item", onclick: o.remover }, ic("x"))
+        : null
+    );
+    return el;
+  }
+
+  function quadroDiretoria(d) {
+    const tom = U.corVisivel(d.cor);
+    const acoes = db.dados.projetos.filter(p => participa(p, d.id));
+    const impls = db.dados.implementacoes.filter(i => participa(i, d.id));
+    // itens antigos que só espelhavam um projeto agora vêm da entidade;
+    // aqui ficam apenas as anotações livres do quadro
+    const avulsos = db.dados.itens_diretoria.filter(i => i.diretoria_id === d.id && !i.projeto_id);
+    const conjuntas = [...acoes, ...impls].filter(compartilhada).length;
+
+    const deProjeto = p => itemDoQuadro({
+      titulo: p.nome, tom,
+      sub: p.diretoria_id === d.id ? (p.responsavel || "") : "",
+      apoio: p.diretoria_id !== d.id,
+      lidera: nomeDiretoria(p.diretoria_id),
+      selos: selosCompartilhado(p, d.id),
+      abrir: () => (location.hash = "#/projeto/" + p.id)
+    });
+
+    const deImplementacao = i => itemDoQuadro({
+      titulo: i.nome, tom,
+      sub: i.diretoria_id === d.id ? i.status : "",
+      apoio: i.diretoria_id !== d.id,
+      lidera: nomeDiretoria(i.diretoria_id),
+      selos: selosCompartilhado(i, d.id),
+      abrir: () => (location.hash = "#/implementacao")
+    });
+
+    const deAvulso = i => itemDoQuadro({
+      titulo: i.titulo, tom, sub: i.responsavel || "",
+      remover: async () => {
+        const ok = await U.confirmar("Remover item", `“${i.titulo}” sai do quadro da ${d.nome}.`, "Remover");
+        if (!ok) return;
+        try { await db.excluir("itens_diretoria", i.id); U.aviso("Item removido", "ok"); }
+        catch (err) { U.aviso(err.message, "erro"); }
+      }
+    });
+
+    const conteudo = {
+      "Iniciativas":       acoes.filter(p => p.tipo === "Iniciativa").map(deProjeto),
+      "Projetos Internos": acoes.filter(p => p.tipo === "Projeto Interno").map(deProjeto),
+      "Pontos de Atenção": acoes.filter(p => p.tipo === "Ponto de Atenção").map(deProjeto),
+      "Processos":         impls.filter(i => i.tipo === "Processo").map(deImplementacao),
+      "Ferramentas":       impls.filter(i => i.tipo === "Ferramenta").map(deImplementacao)
+    };
+    avulsos.forEach(i => { (conteudo[i.coluna] || (conteudo[i.coluna] = [])).push(deAvulso(i)); });
+
+    const criar = {
+      "Iniciativas":       () => modalProjeto(null, { tipo: "Iniciativa", diretoria_id: d.id }),
+      "Projetos Internos": () => modalProjeto(null, { tipo: "Projeto Interno", diretoria_id: d.id }),
+      "Pontos de Atenção": () => modalProjeto(null, { tipo: "Ponto de Atenção", diretoria_id: d.id }),
+      "Processos":         () => modalImplementacao("Processo", d.id),
+      "Ferramentas":       () => modalImplementacao("Ferramenta", d.id)
+    };
+
+    const colunas = h("div.colunas");
     COLUNAS_QUADRO.forEach(nomeColuna => {
-      const desta = itens.filter(i => i.coluna === nomeColuna).sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+      const itens = conteudo[nomeColuna] || [];
       colunas.appendChild(h("div.coluna",
         h("div.coluna-hd",
           h("span.rotulo", nomeColuna),
-          h("span.cont", String(desta.length))
+          h("span.cont", String(itens.length))
         ),
-        ...desta.map(i => h("div.item-quadro", { estilo: { "--tom": U.corVisivel(d.cor) } },
-          i.projeto_id
-            ? h("a", {
-                href: "#/projeto/" + i.projeto_id,
-                estilo: { color: "var(--txt)", textDecoration: "none", fontWeight: 500 }
-              }, i.titulo)
-            : h("span", { estilo: { fontWeight: 500 } }, i.titulo),
-          i.descricao ? h("span.discreto", { estilo: { fontSize: "11.5px" } }, i.descricao) : null,
-          i.responsavel ? h("span.quem", i.responsavel) : null,
-          h("button.remover", {
-            type: "button", "aria-label": "Remover item",
-            onclick: async () => {
-              const ok = await U.confirmar("Remover item", `“${i.titulo}” sai do quadro da ${d.nome}.`, "Remover");
-              if (!ok) return;
-              try { await db.excluir("itens_diretoria", i.id); U.aviso("Item removido", "ok"); }
-              catch (err) { U.aviso(err.message, "erro"); }
-            }
-          }, ic("x"))
-        )),
-        h("button.add-item", {
-          type: "button",
-          onclick: () => modalItemQuadro(d, nomeColuna)
-        }, ic("mais"), "Adicionar")
+        ...itens,
+        h("button.add-item", { type: "button", onclick: criar[nomeColuna] }, ic("mais"), "Adicionar")
       ));
     });
 
     return h("section.painel",
       h("div.diretoria-cab",
         h("span.diretoria-sigla", {
-          estilo: { background: U.corVisivel(d.cor), color: U.corTexto(d.cor) }
+          estilo: { background: tom, color: U.corTexto(d.cor) }
         }, d.sigla || "—"),
         h("div", { estilo: { minWidth: 0, flex: "1 1 auto" } },
           h("h2", { estilo: { fontSize: "16px" } }, d.nome),
           h("div.rotulo", { estilo: { marginTop: "4px" } }, d.composicao || ""),
           d.pergunta_norteadora ? h("p.pergunta", { estilo: { marginTop: "10px" } }, d.pergunta_norteadora) : null
-        )
+        ),
+        h("div", { estilo: { display: "flex", flexDirection: "column", gap: "5px", alignItems: "flex-end" } },
+          chip(`${acoes.length + impls.length} ações`),
+          conjuntas ? chip(`${conjuntas} em conjunto`, "acc") : null)
       ),
       colunas
     );
-  }
-
-  function modalItemQuadro(d, coluna) {
-    const fTitulo = entrada({ placeholder: "Nome da iniciativa, processo ou ferramenta" });
-    const fDesc = entrada({ placeholder: "Detalhe em uma linha (opcional)" });
-    const fResp = entrada({ placeholder: "Quem toca isso" });
-    const fProj = selecao(
-      [["", "Não vincular"], ...db.dados.projetos.map(p => [p.id, p.nome])], { value: "" });
-
-    U.abrirModal({
-      sub: `${d.nome} · ${coluna}`,
-      titulo: "Adicionar ao quadro",
-      largura: 520,
-      corpo: [
-        campo("Título", fTitulo),
-        campo("Descrição", fDesc),
-        h("div.linha-campos",
-          campo("Responsável", fResp),
-          campo("Vincular a um projeto", fProj)
-        )
-      ],
-      acoes: [
-        h("button.btn", { type: "button", onclick: () => U.fecharModal() }, "Cancelar"),
-        h("button.btn.btn-primario", {
-          type: "button",
-          onclick: async () => {
-            if (!fTitulo.value.trim()) { U.aviso("Dê um título ao item.", "alerta"); fTitulo.focus(); return; }
-            try {
-              await db.criar("itens_diretoria", {
-                diretoria_id: d.id, coluna,
-                titulo: fTitulo.value.trim(),
-                descricao: fDesc.value.trim() || null,
-                responsavel: fResp.value.trim() || null,
-                projeto_id: fProj.value || null,
-                ordem: db.dados.itens_diretoria.filter(i => i.diretoria_id === d.id && i.coluna === coluna).length
-              });
-              U.fecharModal();
-              U.aviso("Item adicionado", "ok");
-            } catch (err) { U.aviso("Não salvou: " + err.message, "erro"); }
-          }
-        }, ic("check"), "Adicionar")
-      ]
-    });
   }
 
   /* =========================================================================
@@ -1389,10 +1500,14 @@ CI.views = (function () {
     );
   }
 
-  function modalImplementacao(tipo) {
+  function modalImplementacao(tipo, diretoriaPadrao) {
     const fNome = entrada({ placeholder: tipo === "Ferramenta" ? "Notion, CRM, automação…" : "Repasse semanal, onboarding…" });
     const fResp = entrada({ placeholder: "Quem conduz" });
-    const fDir = selecao([["", "Sem diretoria"], ...db.dados.diretorias.map(d => [d.id, d.nome])], { value: "" });
+    const fDir = selecao([["", "Sem diretoria"], ...db.dados.diretorias.map(d => [d.id, d.nome])], {
+      value: diretoriaPadrao || "",
+      onchange: e => seletor.sincronizar(e.target.value)
+    });
+    const seletor = seletorDiretorias([], diretoriaPadrao || "");
     const fStatus = selecao(STATUS_IMPL, { value: "Proposto" });
     const fRel = entrada({ placeholder: "Link do relatório (opcional)" });
 
@@ -1400,7 +1515,9 @@ CI.views = (function () {
       sub: tipo, titulo: `Nova ${tipo.toLowerCase()}`, largura: 520,
       corpo: [
         campo("Nome", fNome),
-        h("div.linha-campos", campo("Responsável", fResp), campo("Diretoria", fDir)),
+        h("div.linha-campos", campo("Responsável", fResp), campo("Diretoria responsável", fDir)),
+        campo("Também vale para", seletor.el,
+              "Uma ferramenta ou processo compartilhado entra no quadro de cada diretoria e conta uma vez no TIP."),
         h("div.linha-campos", campo("Status", fStatus), campo("Relatório", fRel))
       ],
       acoes: [
@@ -1414,6 +1531,7 @@ CI.views = (function () {
                 tipo, nome: fNome.value.trim(),
                 responsavel: fResp.value.trim() || null,
                 diretoria_id: fDir.value || null,
+                diretorias_apoio: seletor.valor(),
                 status: fStatus.value,
                 relatorio_url: fRel.value.trim() || null,
                 data_implementacao: fStatus.value === "Implementado" ? U.hojeISO() : null
@@ -1459,7 +1577,7 @@ CI.views = (function () {
 
     /* etapas por diretoria */
     const porDir = db.dados.diretorias.map(d => {
-      const ids = db.dados.projetos.filter(p => p.diretoria_id === d.id).map(p => p.id);
+      const ids = db.dados.projetos.filter(p => participa(p, d.id)).map(p => p.id);
       const es = db.dados.etapas.filter(e => ids.includes(e.projeto_id));
       return { rotulo: d.nome, valor: es.filter(e => e.concluida).length, total: es.length, tom: U.corVisivel(d.cor) };
     }).filter(x => x.total > 0);
@@ -1477,7 +1595,8 @@ CI.views = (function () {
     return h("div.view",
       h("div.grade.surge", { estilo: { gridTemplateColumns: "repeat(auto-fit, minmax(310px, 1fr))" } },
         cartao("TIP", "implementados ÷ propostos", tip,
-          `${implementados} de ${impl.length} processos e ferramentas já em uso.`, "var(--d-agua)"),
+          `${implementados} de ${impl.length} processos e ferramentas já em uso. ` +
+          "Os compartilhados contam uma vez.", "var(--d-agua)"),
         cartao("ISD", "notas recebidas ÷ notas máximas", isd,
           av.length ? `${av.length} avaliação(ões) registradas.` : "Ainda sem avaliações lançadas.", "var(--d-peri)"),
         cartao("Inovação", "objetivos atingidos ÷ projetos definidos", inov,
@@ -1499,6 +1618,10 @@ CI.views = (function () {
                   ))
                 )
               : U.vazio("pulso", "Sem etapas cadastradas", "Adicione etapas aos projetos para acompanhar a execução.")
+          ,
+            h("p.discreto", { estilo: { fontSize: "11.5px", marginTop: "13px", lineHeight: 1.55 } },
+              "Projetos conjuntos entram na barra de cada diretoria envolvida, porque as etapas são executadas por todas. " +
+              "Nos três indicadores acima cada ação vale uma só.")
           )
         ),
         h("section.painel",
@@ -1780,25 +1903,26 @@ CI.views = (function () {
   }
 
   /* =========================================================================
-     PÁGINA INICIAL — o mascote equilibrista
-     Loop de 6 s em canvas, animado por curvas (nada de CSS keyframe solto):
-       0.00–0.90  entra correndo e freia derrapando
-       1.00–2.15  as cinco caixas caem e se empilham na cabeça
-       2.45–3.65  a torre tomba, ele entra em pânico
-       3.65–4.18  salvamento elástico
-       4.18–5.25  pulo de comemoração e confete
-       5.25–6.00  sai correndo de quadro e o laço recomeça
+     PÁGINA INICIAL — o gerente de inovação e a equipe
+     Loop de 6,8 s em canvas, animado por curvas de easing:
+       0.00–0.90  o gerente entra correndo e freia derrapando
+       1.00–2.10  as cinco caixas dos projetos caem e se empilham
+       2.45–3.35  a torre tomba e a caixa de cima começa a escapar
+       3.15–3.65  os dois ajudantes entram correndo pelos lados
+       3.65–4.05  um escora a torre, o outro devolve a caixa no lugar
+       4.05–5.20  comemoração em trio, com confete
+       5.20–6.80  saem juntos de quadro e o laço recomeça
      ====================================================================== */
 
-  const DUR_CICLO = 6000;
+  const DUR_CICLO = 6380;
 
   /* --- curvas ------------------------------------------------------------ */
   const sat01 = t => (t < 0 ? 0 : t > 1 ? 1 : t);
-  const saiCubica  = t => 1 - Math.pow(1 - t, 3);
+  const saiCubica   = t => 1 - Math.pow(1 - t, 3);
   const entraCubica = t => t * t * t;
-  const entraQuad  = t => t * t;
-  const suave      = t => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-  const saiCostas  = t => { const c = 1.9; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+  const entraQuad   = t => t * t;
+  const suave       = t => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  const saiCostas   = t => { const c = 1.9; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
   const saiElastica = t => (t === 0 || t === 1) ? t
     : Math.pow(2, -9 * t) * Math.sin((t * 10 - .75) * (2 * Math.PI / 3)) + 1;
 
@@ -1827,9 +1951,8 @@ CI.views = (function () {
     const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim());
     if (!m) return hex;
     const n = parseInt(m[1], 16);
-    const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255]
-      .map(v => Math.round(v * (1 - f)).toString(16).padStart(2, "0"));
-    return "#" + c.join("");
+    return "#" + [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+      .map(v => Math.round(v * (1 - f)).toString(16).padStart(2, "0")).join("");
   }
 
   function palcoAnimado() {
@@ -1837,8 +1960,9 @@ CI.views = (function () {
 
     const cv = h("canvas", {
       role: "img",
-      "aria-label": "Animação: um mascote equilibra uma torre de caixas coloridas na cabeça, " +
-                    "quase derruba tudo, salva no último instante e comemora.",
+      "aria-label": "Animação: o gerente de inovação equilibra na cabeça uma torre com as caixas " +
+                    "dos projetos internos; quando ela começa a cair, dois colegas entram correndo, " +
+                    "escoram a torre e devolvem a caixa que escapou. Os três comemoram.",
       estilo: { display: "block", width: "100%", height: "auto", aspectRatio: "560 / 262" }
     });
     const ctx = cv.getContext("2d");
@@ -1849,13 +1973,17 @@ CI.views = (function () {
       acento: tok("--accent", "#FF5A1F"),
       linha:  tok("--line", "#1E2A38"),
       suave:  tok("--line-soft", "#16202C"),
-      fraco:  tok("--faint", "#57677A"),
-      txt:    tok("--txt", "#E7EDF4")
+      fraco:  tok("--faint", "#57677A")
     };
-    C.sombra = escurecer(C.acento, .38);
-    C.pe = escurecer(C.acento, .52);
 
-    /* as caixas são as diretorias (sem laranja: essa cor é do mascote) */
+    /* elenco */
+    const GERENTE = { cor: C.acento, pe: escurecer(C.acento, .52), sombra: escurecer(C.acento, .38) };
+    const APOIO = [
+      { cor: U.corVisivel("#B79CF0"), lado: -1 },   // entra pela esquerda
+      { cor: U.corVisivel("#2DBFA8"), lado:  1 }    // entra pela direita
+    ].map(a => Object.assign(a, { pe: escurecer(a.cor, .45), sombra: escurecer(a.cor, .3) }));
+
+    /* as caixas são os projetos internos */
     const CAIXAS = [
       { cor: U.corVisivel("#06B6D4"), larg: 56 },
       { cor: U.corVisivel("#2563EB"), larg: 47 },
@@ -1864,11 +1992,11 @@ CI.views = (function () {
       { cor: U.corVisivel("#5B21B6"), larg: 50 }
     ];
     const CX_H = 19, CX_GAP = 3;
-    const QUEDA = CAIXAS.map((_, i) => 1000 + i * 205);   // quando cada caixa cai
+    const QUEDA = CAIXAS.map((_, i) => 1000 + i * 200);
 
-    /* partículas: poeira da freada, confete e brilho do salvamento */
-    const pos = Array.from({ length: 46 }, () => ({ vida: 0 }));
-    let soltas = { poeira: -1, confete: -1, brilho: -1 };
+    const POSTO = 284;                 // onde o gerente para
+    const pos = Array.from({ length: 52 }, () => ({ vida: 0 }));
+    const soltas = { poeira: -1, poeiraA: -1, confete: -1, brilho: -1 };
 
     function soltar(tipo, n, gerar) {
       let feitas = 0;
@@ -1879,9 +2007,7 @@ CI.views = (function () {
       }
     }
 
-    /* --- desenho ---------------------------------------------------------- */
-
-    function retanguloArredondado(x, y, w, hh, r) {
+    function rrect(x, y, w, hh, r) {
       const k = Math.min(r, Math.abs(w) / 2, Math.abs(hh) / 2);
       ctx.beginPath();
       ctx.moveTo(x + k, y);
@@ -1892,249 +2018,330 @@ CI.views = (function () {
       ctx.closePath();
     }
 
-    function desenharCena(t, dt) {
-      ctx.clearRect(0, 0, LW, LH);
-
-      /* ---------- parâmetros animados ---------- */
-      const x = kf(t, [
-        [0, -110], [900, 284, saiCubica], [5250, 284],
-        [5450, 248, saiCubica], [6000, 730, entraCubica]      // recua e dispara
-      ]);
-
-      const pulo = kf(t, [
-        [4340, 0], [4380, -4, saiCubica], [4560, 23, saiCubica],
-        [4820, 0, entraQuad], [4900, 0]
-      ]);
-
-      // achatamento do corpo: freada, cada caixa que encaixa, agachada e pulo
-      let apy = kf(t, [
-        [0, 1], [860, 1], [925, .80, saiCubica], [1060, 1.07, saiCubica], [1190, 1, saiCubica],
-        [4300, 1], [4380, .76, saiCubica], [4520, 1.15, saiCubica], [4780, 1, saiCubica],
-        [4830, .84, saiCubica], [4960, 1.04, saiCubica], [5080, 1, saiCubica]
-      ]);
-      QUEDA.forEach(q => { apy += tremor(t, q + 240, -.05, 5.5, 9); });
-      const apx = 1 + (1 - apy) * .72;
-
-      const inclina = kf(t, [
-        [0, .21], [700, .21], [890, -.30, saiCubica], [1080, .06, saiCubica], [1220, 0, saiCubica],
-        [2450, 0], [2900, -.10, suave], [3650, -.32, suave],
-        [3880, .16, saiCostas], [4200, 0, saiElastica],
-        [5250, 0], [5460, .24, saiCubica]
-      ]);
-
-      let tomba = kf(t, [
-        [2380, 0], [2470, -.045, saiCubica],   // antecipação
-        [3350, .26, suave], [3650, .37, suave],
-        [3830, -.13, saiCubica], [4200, 0, saiElastica]
-      ]);
-      QUEDA.forEach(q => { tomba += tremor(t, q + 230, .055); });
-      if (t > 5250) tomba += Math.sin((t - 5250) / 48) * .05;      // balança na corrida
-
-      const panico = kf(t, [[2700, 0], [3120, 1, saiCubica], [3660, 1], [3880, 0, saiCubica]]);
-      const feliz  = kf(t, [[4160, 0], [4320, 1, saiCubica], [5320, 1], [5440, 0]]);
-      const corre  = (t < 820 || t > 5300) ? 1 : 0;
-      const passo  = t * 0.035;
-
-      /* ---------- disparos ---------- */
-      const volta = Math.floor(t / DUR_CICLO);
-      if (t > 860 && t < 1000 && soltas.poeira !== volta) {
-        soltas.poeira = volta;
-        soltar("poeira", 7, i => ({
-          vida: 1, dur: .55, x: x - 14 - i * 5, y: CHAO - 2,
-          vx: -40 - Math.random() * 70, vy: -12 - Math.random() * 26, r: 3 + Math.random() * 4
-        }));
-      }
-      if (t > 3860 && t < 3980 && soltas.brilho !== volta) {
-        soltas.brilho = volta;
-        soltar("brilho", 8, () => ({
-          vida: 1, dur: .5, x: x + (Math.random() - .5) * 70, y: 70 + Math.random() * 40,
-          vx: (Math.random() - .5) * 60, vy: -20 - Math.random() * 40, r: 2 + Math.random() * 2
-        }));
-      }
-      if (t > 4520 && t < 4620 && soltas.confete !== volta) {
-        soltas.confete = volta;
-        soltar("confete", 18, i => ({
-          vida: 1, dur: 1.5, x: x + (Math.random() - .5) * 40, y: CHAO - 170 - Math.random() * 30,
-          vx: (Math.random() - .5) * 230, vy: -90 - Math.random() * 130,
-          r: 2.4 + Math.random() * 2, giro: Math.random() * 6,
-          cor: [C.acento, ...CAIXAS.map(c => c.cor)][i % 6]
-        }));
-      }
-
-      /* ---------- chão ---------- */
-      const g = ctx.createLinearGradient(40, 0, LW - 40, 0);
-      g.addColorStop(0, "transparent");
-      g.addColorStop(.5, C.linha);
-      g.addColorStop(1, "transparent");
-      ctx.strokeStyle = g; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(40, CHAO + .5); ctx.lineTo(LW - 40, CHAO + .5); ctx.stroke();
+    /* ---------------------------------------------------------------------
+       Um boneco. Devolve a altura do topo da cabeça, que é onde a torre apoia.
+       --------------------------------------------------------------------- */
+    function boneco(o) {
+      const k = o.k ?? 1;
+      const pernaH = 18 * k, corpoW = 63 * k, corpoH = 53 * k;
+      const baseY = CHAO - (o.pulo || 0);
+      const apy = o.apy ?? 1, apx = o.apx ?? (1 + (1 - apy) * .72);
 
       /* sombra */
-      const alturaVoo = pulo / 23;
+      const voo = (o.pulo || 0) / 26;
       ctx.fillStyle = C.suave;
-      ctx.globalAlpha = .9 - alturaVoo * .45;
+      ctx.globalAlpha = .9 - voo * .45;
       ctx.beginPath();
-      ctx.ellipse(x, CHAO + 3, 35 * apx * (1 - alturaVoo * .3), 6 * (1 - alturaVoo * .3), 0, 0, 7);
+      ctx.ellipse(o.x, CHAO + 3, 35 * k * apx * (1 - voo * .3), 6 * k * (1 - voo * .3), 0, 0, 7);
       ctx.fill();
       ctx.globalAlpha = 1;
 
-      /* ---------- traços de velocidade ---------- */
-      if (corre) {
-        ctx.strokeStyle = C.acento; ctx.lineWidth = 2; ctx.lineCap = "round";
-        for (let i = 0; i < 3; i++) {
-          const o = 34 + i * 16, dir = t > 5300 ? 1 : 1;
-          ctx.globalAlpha = .1 + .12 * ((Math.sin(t / 60 + i) + 1) / 2);
-          ctx.beginPath();
-          ctx.moveTo(x - o * dir - 26, CHAO - 42 - i * 20);
-          ctx.lineTo(x - o * dir, CHAO - 42 - i * 20);
-          ctx.stroke();
-        }
-        ctx.globalAlpha = 1;
-      }
-
-      /* ---------- corpo ---------- */
-      const baseY = CHAO - pulo;
-      const pernaH = 18, corpoW = 63, corpoH = 53;
-
-      // pernas
-      const bal = corre ? Math.sin(passo) * 7 : Math.sin(t / 300) * 1.2;
-      const balPanico = panico ? Math.sin(t / 34) * 5 * panico : 0;
-      ctx.strokeStyle = C.pe; ctx.lineWidth = 7; ctx.lineCap = "round";
-      [-13, 13].forEach((dx, i) => {
-        const o = (i ? -1 : 1) * (bal + balPanico);
+      /* pernas */
+      const bal = o.correndo ? Math.sin(o.passo) * 7 * k : Math.sin(o.passo * .12) * 1.2 * k;
+      const nervoso = (o.panico || 0) * Math.sin(o.passo * 3.4) * 5 * k;
+      const abre = o.escorando ? 6 * k : 0;
+      ctx.strokeStyle = o.pe; ctx.lineWidth = 7 * k; ctx.lineCap = "round";
+      [-13 * k, 13 * k].forEach((dx, i) => {
+        const s = (i ? -1 : 1);
         ctx.beginPath();
-        ctx.moveTo(x + dx, baseY - pernaH - 2);
-        ctx.lineTo(x + dx + o, baseY - (pulo > 2 ? 4 : 0));
+        ctx.moveTo(o.x + dx, baseY - pernaH - 2 * k);
+        ctx.lineTo(o.x + dx + s * (bal + nervoso) + (i ? abre : -abre), baseY - (o.pulo > 2 ? 4 : 0));
         ctx.stroke();
       });
 
       ctx.save();
-      ctx.translate(x, baseY - pernaH);
-      ctx.rotate(inclina * .35);
+      ctx.translate(o.x, baseY - pernaH);
+      ctx.rotate(o.inclina || 0);
       ctx.scale(apx, apy);
 
-      // tronco
-      ctx.fillStyle = C.acento;
-      retanguloArredondado(-corpoW / 2, -corpoH, corpoW, corpoH, 17);
+      /* tronco */
+      ctx.fillStyle = o.cor;
+      rrect(-corpoW / 2, -corpoH, corpoW, corpoH, 17 * k);
       ctx.fill();
-      // sombreado inferior, dá volume
-      ctx.fillStyle = C.sombra; ctx.globalAlpha = .28;
-      retanguloArredondado(-corpoW / 2, -corpoH * .38, corpoW, corpoH * .38, 15);
+      ctx.fillStyle = o.sombra; ctx.globalAlpha = .28;
+      rrect(-corpoW / 2, -corpoH * .38, corpoW, corpoH * .38, 15 * k);
       ctx.fill();
       ctx.globalAlpha = 1;
 
-      // olhos
-      const ax = 14, ay = -corpoH + 21;
+      /* olhos */
+      const ax = 14 * k, ay = -corpoH + 21 * k;
+      const panico = o.panico || 0, feliz = o.feliz || 0;
       const arregala = 1 + panico * .45;
       [-1, 1].forEach(s => {
         if (feliz > .5) {
-          ctx.strokeStyle = "#11171E"; ctx.lineWidth = 2.6; ctx.lineCap = "round";
+          ctx.strokeStyle = "#11171E"; ctx.lineWidth = 2.6 * k; ctx.lineCap = "round";
           ctx.beginPath();
-          ctx.arc(s * ax, ay + 2, 7.4, Math.PI * 1.15, Math.PI * 1.85);
+          ctx.arc(s * ax, ay + 2 * k, 7.4 * k, Math.PI * 1.15, Math.PI * 1.85);
           ctx.stroke();
         } else {
           ctx.fillStyle = "#FFFFFF";
           ctx.beginPath();
-          ctx.ellipse(s * ax, ay, 8.8 * arregala, 9.5 * arregala, 0, 0, 7);
+          ctx.ellipse(s * ax, ay, 8.8 * k * arregala, 9.5 * k * arregala, 0, 0, 7);
           ctx.fill();
-          const jx = panico * Math.sin(t / 32) * 1.6;
+          const jx = panico * Math.sin(o.passo * 3.6) * 1.6 * k;
           ctx.fillStyle = "#11171E";
           ctx.beginPath();
-          ctx.ellipse(s * ax + jx + (corre ? 1.6 : 0), ay + panico * -1.2,
-                      4.2 * (1 - panico * .42), 4.5 * (1 - panico * .42), 0, 0, 7);
+          ctx.ellipse(s * ax + jx + (o.olhar || 0) * k, ay + panico * -1.2 * k + (o.olharY || 0) * k,
+                      4.2 * k * (1 - panico * .42), 4.5 * k * (1 - panico * .42), 0, 0, 7);
           ctx.fill();
         }
       });
 
-      // boca
-      ctx.strokeStyle = "#11171E"; ctx.lineWidth = 2.2; ctx.lineCap = "round";
-      const by = ay + 17;
+      /* boca */
+      ctx.strokeStyle = "#11171E"; ctx.lineWidth = 2.2 * k; ctx.lineCap = "round";
+      const by = ay + 17 * k;
       if (panico > .35) {
         ctx.fillStyle = "#11171E";
         ctx.beginPath();
-        ctx.ellipse(0, by + 1, 4.2 * panico, 5.6 * panico, 0, 0, 7);
+        ctx.ellipse(0, by + k, 4.2 * k * panico, 5.6 * k * panico, 0, 0, 7);
         ctx.fill();
       } else if (feliz > .35) {
         ctx.beginPath();
-        ctx.arc(0, by - 4, 8 * feliz, .15 * Math.PI, .85 * Math.PI);
+        ctx.arc(0, by - 4 * k, 8 * k * feliz, .15 * Math.PI, .85 * Math.PI);
+        ctx.stroke();
+      } else if (o.concentrado) {
+        ctx.beginPath();
+        ctx.moveTo(-4.5 * k, by - 1 * k); ctx.lineTo(4.5 * k, by - 1 * k);
         ctx.stroke();
       } else {
         ctx.beginPath();
-        ctx.arc(0, by - 2, 5.2, .2 * Math.PI, .8 * Math.PI);
+        ctx.arc(0, by - 2 * k, 5.2 * k, .2 * Math.PI, .8 * Math.PI);
         ctx.stroke();
       }
       ctx.restore();
 
-      /* ---------- torre ---------- */
-      const topoCabeca = baseY - pernaH - corpoH * apy;
-      ctx.save();
-      ctx.translate(x, topoCabeca);
-      ctx.rotate(tomba);
-
-      // braços segurando a base da torre
-      ctx.strokeStyle = C.pe; ctx.lineWidth = 5.5; ctx.lineCap = "round";
-      const quantas = QUEDA.filter(q => t >= q + 200).length;
-      if (quantas) {
+      /* braços */
+      const topo = baseY - pernaH - corpoH * apy;
+      ctx.strokeStyle = o.pe; ctx.lineWidth = 5.5 * k; ctx.lineCap = "round";
+      if (o.bracos === "segura") {
         [-1, 1].forEach(s => {
           ctx.beginPath();
-          ctx.moveTo(s * 28, 19);
-          ctx.quadraticCurveTo(s * 36, 3, s * 21, -5);
+          ctx.moveTo(o.x + s * 28 * k, topo + 19 * k);
+          ctx.quadraticCurveTo(o.x + s * 36 * k, topo + 3 * k, o.x + s * 21 * k, topo - 5 * k);
           ctx.stroke();
         });
+      } else if (o.bracos === "cima") {
+        // as duas mãos convergem num ponto só: é isso que lê como "escorando"
+        ctx.lineWidth = 6.5 * k;
+        const lado = o.empurraLado || 0;
+        const maoX = o.x + lado * k, maoY = topo - (o.empurraY || 18) * k;
+        [-1, 1].forEach((s, i) => {
+          ctx.beginPath();
+          ctx.moveTo(o.x + s * 22 * k, topo + 20 * k);
+          ctx.quadraticCurveTo(o.x + s * 26 * k + lado * .45 * k, topo + 6 * k,
+                               maoX + (i ? 7 : -7) * k, maoY);
+          ctx.stroke();
+        });
+        ctx.fillStyle = o.pe;
+        [-7, 7].forEach(dx => {
+          ctx.beginPath(); ctx.arc(maoX + dx * k, maoY, 4.6 * k, 0, 7); ctx.fill();
+        });
+      } else if (o.bracos === "aponta") {
+        ctx.beginPath();
+        ctx.moveTo(o.x - 24 * k, topo + 20 * k);
+        ctx.quadraticCurveTo(o.x - 32 * k, topo + 8 * k, o.x - 26 * k, topo - 6 * k);
+        ctx.stroke();
       }
 
-      let alturaAcum = 0;
+      return topo;
+    }
+
+    /* ---------------------------------------------------------------------
+       A cena
+       --------------------------------------------------------------------- */
+    function desenharCena(t, dt) {
+      ctx.clearRect(0, 0, LW, LH);
+
+      /* ------- gerente ------- */
+      const gx = kf(t, [
+        [0, -110], [900, POSTO, saiCubica], [5200, POSTO],
+        [5420, POSTO - 34, saiCubica], [6060, 700, entraCubica], [6380, 700]
+      ]);
+      const gPulo = kf(t, [
+        [4240, 0], [4290, -4, saiCubica], [4470, 23, saiCubica],
+        [4720, 0, entraQuad], [4800, 0]
+      ]);
+      let gApy = kf(t, [
+        [0, 1], [860, 1], [925, .80, saiCubica], [1060, 1.07, saiCubica], [1190, 1, saiCubica],
+        [4200, 1], [4290, .76, saiCubica], [4440, 1.15, saiCubica], [4700, 1, saiCubica],
+        [4740, .84, saiCubica], [4880, 1.04, saiCubica], [5000, 1, saiCubica]
+      ]);
+      QUEDA.forEach(q => { gApy += tremor(t, q + 235, -.05, 5.5, 9); });
+
+      const gInclina = kf(t, [
+        [0, .21], [700, .21], [890, -.30, saiCubica], [1080, .06, saiCubica], [1220, 0, saiCubica],
+        [2450, 0], [2900, -.10, suave], [3350, -.32, suave],
+        [3900, .14, saiCostas], [4200, 0, saiElastica],
+        [5200, 0], [5450, .24, saiCubica]
+      ]);
+
+      const panicoG = kf(t, [[2650, 0], [3050, 1, saiCubica], [3700, 1], [3900, 0, saiCubica]]);
+      const felizG  = kf(t, [[4100, 0], [4260, 1, saiCubica], [5260, 1], [5400, 0]]);
+      const correG  = (t < 830 || t > 5400) ? 1 : 0;
+
+      /* ------- torre ------- */
+      let tomba = kf(t, [
+        [2380, 0], [2470, -.045, saiCubica],
+        [3350, .26, suave], [3560, .37, suave],
+        [3660, .34], [3860, -.12, saiCubica], [4180, 0, saiElastica]
+      ]);
+      QUEDA.forEach(q => { tomba += tremor(t, q + 230, .055); });
+      if (t > 5400) tomba += Math.sin((t - 5400) / 48) * .05;
+
+      // a caixa de cima escorrega e é devolvida pelo ajudante da direita
+      const escapa = kf(t, [[2700, 0], [3560, 22, suave], [3720, 26], [3980, 0, saiCostas]]);
+
+      /* ------- ajudantes ------- */
+      const chegaA = kf(t, [[3140, -110], [3620, POSTO - 72, saiCubica], [5250, POSTO - 72],
+                            [5500, POSTO - 120, saiCubica], [6150, -170, entraCubica], [6380, -170]]);
+      const chegaB = kf(t, [[3180, LW + 110], [3660, POSTO + 78, saiCubica], [5250, POSTO + 78],
+                            [5500, POSTO + 128, saiCubica], [6150, LW + 180, entraCubica], [6380, LW + 180]]);
+      const puloB = kf(t, [[3520, 0], [3640, 19, saiCubica], [3760, 0, entraQuad], [3820, 0]]);
+      const puloFesta = kf(t, [[4300, 0], [4460, 20, saiCubica], [4680, 0, entraQuad], [4760, 0]]);
+      const escora = kf(t, [[3600, 0], [3720, 1, saiCubica], [4260, 1], [4420, 0, saiCubica]]);
+      const felizApoio = kf(t, [[4180, 0], [4340, 1, saiCubica], [5280, 1], [5420, 0]]);
+
+      /* ------- disparos de partícula ------- */
+      const volta = Math.floor(t / 100);   // só para não repetir dentro do mesmo intervalo
+      if (t > 860 && t < 990 && soltas.poeira !== volta) {
+        soltas.poeira = volta;
+        soltar("poeira", 7, i => ({
+          vida: 1, dur: .55, x: gx - 14 - i * 5, y: CHAO - 2,
+          vx: -40 - Math.random() * 70, vy: -12 - Math.random() * 26, r: 3 + Math.random() * 4
+        }));
+      }
+      if (t > 3620 && t < 3740 && soltas.poeiraA !== volta) {
+        soltas.poeiraA = volta;
+        soltar("poeira", 8, i => ({
+          vida: 1, dur: .5, x: (i % 2 ? chegaA + 16 : chegaB - 16), y: CHAO - 2,
+          vx: (i % 2 ? 1 : -1) * (30 + Math.random() * 60), vy: -10 - Math.random() * 22,
+          r: 2.5 + Math.random() * 3
+        }));
+      }
+      if (t > 3880 && t < 3990 && soltas.brilho !== volta) {
+        soltas.brilho = volta;
+        soltar("brilho", 9, () => ({
+          vida: 1, dur: .5, x: gx + (Math.random() - .5) * 90, y: 60 + Math.random() * 60,
+          vx: (Math.random() - .5) * 60, vy: -20 - Math.random() * 40, r: 2 + Math.random() * 2
+        }));
+      }
+      if (t > 4440 && t < 4550 && soltas.confete !== volta) {
+        soltas.confete = volta;
+        soltar("confete", 22, i => ({
+          vida: 1, dur: 1.6, x: gx + (Math.random() - .5) * 150, y: CHAO - 170 - Math.random() * 40,
+          vx: (Math.random() - .5) * 240, vy: -90 - Math.random() * 140,
+          r: 2.4 + Math.random() * 2, giro: Math.random() * 6,
+          cor: [C.acento, APOIO[0].cor, APOIO[1].cor, ...CAIXAS.map(c => c.cor)][i % 8]
+        }));
+      }
+
+      /* ------- chão ------- */
+      const g = ctx.createLinearGradient(30, 0, LW - 30, 0);
+      g.addColorStop(0, "transparent"); g.addColorStop(.5, C.linha); g.addColorStop(1, "transparent");
+      ctx.strokeStyle = g; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(30, CHAO + .5); ctx.lineTo(LW - 30, CHAO + .5); ctx.stroke();
+
+      /* ------- traços de velocidade ------- */
+      function rastro(x, dir, alpha) {
+        if (alpha <= 0) return;
+        ctx.strokeStyle = C.acento; ctx.lineWidth = 2; ctx.lineCap = "round";
+        for (let i = 0; i < 3; i++) {
+          ctx.globalAlpha = alpha * (.12 + .12 * ((Math.sin(t / 60 + i) + 1) / 2));
+          ctx.beginPath();
+          ctx.moveTo(x - dir * (34 + i * 16) - dir * 26, CHAO - 40 - i * 18);
+          ctx.lineTo(x - dir * (34 + i * 16), CHAO - 40 - i * 18);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+      rastro(gx, 1, correG);
+      rastro(chegaA, 1, (t > 3140 && t < 3620) || (t > 5500 && t < 6150) ? .8 : 0);
+      rastro(chegaB, -1, (t > 3180 && t < 3660) || (t > 5500 && t < 6150) ? .8 : 0);
+
+      /* ------- ajudante da esquerda: escora ------- */
+      const kA = .72;
+      boneco({
+        x: chegaA, k: kA, cor: APOIO[0].cor, pe: APOIO[0].pe, sombra: APOIO[0].sombra,
+        pulo: puloFesta * felizApoio, apy: 1 - escora * .06,
+        inclina: escora * .30, passo: t * .035,
+        correndo: (t > 3140 && t < 3600) || (t > 5480 && t < 6150),
+        feliz: felizApoio, concentrado: escora > .5 && felizApoio < .3,
+        bracos: escora > .3 ? "cima" : "aponta",
+        empurraY: 34, empurraLado: 52, olhar: 3
+      });
+
+      /* ------- o gerente ------- */
+      const topoCabeca = boneco({
+        x: gx, k: 1, cor: GERENTE.cor, pe: GERENTE.pe, sombra: GERENTE.sombra,
+        pulo: gPulo, apy: gApy, inclina: gInclina * .35, passo: t * .035,
+        correndo: correG, panico: panicoG, feliz: felizG,
+        bracos: QUEDA.filter(q => t >= q + 200).length ? "segura" : null,
+        olhar: correG ? 1.6 : 0
+      });
+
+      /* ------- a torre ------- */
+      ctx.save();
+      ctx.translate(gx, topoCabeca);
+      ctx.rotate(tomba);
       CAIXAS.forEach((cx, i) => {
         const t0 = QUEDA[i], t1 = t0 + 250;
         const p = sat01((t - t0) / (t1 - t0));
-        if (p <= 0) { alturaAcum += CX_H + CX_GAP; return; }
-
+        if (p <= 0) return;
         const yFinal = -(i + 1) * (CX_H + CX_GAP);
         const yy = yFinal - (1 - entraQuad(p)) * 200;
         const impacto = tremor(t, t1, .18, 6, 11);
         const sh = 1 + (p >= 1 ? impacto : 0);
         const sw = 1 - (p >= 1 ? impacto * .8 : 0);
-        const gi = (i % 2 ? 1 : -1) * Math.sin(t / 420 + i) * 1.2;
-
+        const deriva = (i % 2 ? 1 : -1) * Math.sin(t / 420 + i) * 1.2;
+        const fuga = i === 4 ? escapa : i === 3 ? escapa * .3 : 0;
         ctx.save();
-        ctx.translate(gi, yy + CX_H / 2);
+        ctx.translate(deriva + fuga, yy + CX_H / 2);
+        ctx.rotate(fuga * .006);
         ctx.scale(sw, sh);
         ctx.fillStyle = cx.cor;
-        retanguloArredondado(-cx.larg / 2, -CX_H / 2, cx.larg, CX_H, 4.5);
+        rrect(-cx.larg / 2, -CX_H / 2, cx.larg, CX_H, 4.5);
         ctx.fill();
         ctx.fillStyle = "rgba(255,255,255,.22)";
-        retanguloArredondado(-cx.larg / 2 + 4, -CX_H / 2 + 3.2, cx.larg - 8, 2.6, 1.3);
+        rrect(-cx.larg / 2 + 4, -CX_H / 2 + 3.2, cx.larg - 8, 2.6, 1.3);
         ctx.fill();
         ctx.restore();
-        alturaAcum += CX_H + CX_GAP;
       });
       ctx.restore();
 
-      /* gota de suor no auge do pânico */
-      if (panico > .5) {
-        const gp = sat01((t - 3180) / 620);
+      /* ------- ajudante da direita: devolve a caixa ------- */
+      const kB = .72;
+      boneco({
+        x: chegaB, k: kB, cor: APOIO[1].cor, pe: APOIO[1].pe, sombra: APOIO[1].sombra,
+        pulo: puloB + puloFesta * felizApoio, apy: 1 - escora * .06 - (puloB > 4 ? .04 : 0),
+        inclina: -escora * .22, passo: t * .035,
+        correndo: (t > 3180 && t < 3640) || (t > 5480 && t < 6150),
+        feliz: felizApoio, concentrado: escora > .5 && felizApoio < .3,
+        bracos: escora > .3 ? "cima" : "aponta",
+        empurraY: 34, empurraLado: -52, olhar: -3, olharY: -1
+      });
+
+      /* ------- gota de suor no auge do pânico ------- */
+      if (panicoG > .5) {
+        const gp = sat01((t - 3120) / 620);
         ctx.fillStyle = "#8FD3F4";
-        ctx.globalAlpha = (1 - gp) * panico;
-        const gx = x + 30 + gp * 26, gy = topoCabeca + 26 - gp * 8 + gp * gp * 46;
+        ctx.globalAlpha = (1 - gp) * panicoG;
         ctx.beginPath();
-        ctx.ellipse(gx, gy, 3, 4.2, .5, 0, 7);
+        ctx.ellipse(gx + 34 + gp * 26, topoCabeca + 26 - gp * 8 + gp * gp * 46, 3, 4.2, .5, 0, 7);
         ctx.fill();
         ctx.globalAlpha = 1;
       }
 
-      /* ---------- partículas ---------- */
+      /* ------- partículas ------- */
       pos.forEach(pt => {
         if (pt.vida <= 0) return;
         pt.vida -= dt / pt.dur;
         if (pt.vida <= 0) return;
-        pt.vx *= 0.99;
+        pt.vx *= .99;
         pt.vy += (pt.tipo === "poeira" ? 40 : pt.tipo === "brilho" ? 0 : 480) * dt;
-        pt.x += pt.vx * dt;
-        pt.y += pt.vy * dt;
+        pt.x += pt.vx * dt; pt.y += pt.vy * dt;
         ctx.globalAlpha = Math.min(1, pt.vida * 1.3);
         if (pt.tipo === "poeira") {
-          ctx.fillStyle = C.fraco;
-          ctx.globalAlpha *= .4;
+          ctx.fillStyle = C.fraco; ctx.globalAlpha *= .4;
           ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r * (2 - pt.vida), 0, 7); ctx.fill();
         } else if (pt.tipo === "brilho") {
           ctx.strokeStyle = C.acento; ctx.lineWidth = 1.6; ctx.lineCap = "round";
@@ -2155,37 +2362,66 @@ CI.views = (function () {
       });
     }
 
-    /* --- laço -------------------------------------------------------------- */
+    /* --- dimensionamento e laço ------------------------------------------- */
 
+    let larguraAnterior = 0;
     function ajustar() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const larguraCss = cv.clientWidth || LW;
-      const alvoW = Math.round(larguraCss * dpr);
-      const alvoH = Math.round(larguraCss * (LH / LW) * dpr);
-      if (cv.width !== alvoW || cv.height !== alvoH) { cv.width = alvoW; cv.height = alvoH; }
-      const k = alvoW / LW;
-      ctx.setTransform(k, 0, 0, k, 0, 0);
+      const cssW = cv.clientWidth || LW;
+      const alvoW = Math.round(cssW * dpr);
+      const alvoH = Math.round(cssW * (LH / LW) * dpr);
+      const mudou = cv.width !== alvoW || cv.height !== alvoH;
+      if (mudou) { cv.width = alvoW; cv.height = alvoH; }
+      ctx.setTransform(alvoW / LW, 0, 0, alvoW / LW, 0, 0);
+      larguraAnterior = alvoW;
+      return mudou;
     }
 
-    const quieto = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (quieto) {
-      requestAnimationFrame(() => { ajustar(); desenharCena(4650, 0); });
-      return cv;
-    }
+    /* O Windows com "efeitos de animação" desligado faz o navegador pedir menos
+       movimento. Respeitamos: começa parado — mas com um botão bem visível, e a
+       escolha fica guardada neste navegador. */
+    const pedeQuieto = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let escolha = null;
+    try { escolha = localStorage.getItem("ci:animacao"); } catch (_) {}
+    let rodando = escolha ? escolha === "rodando" : !pedeQuieto;
 
+    const botao = h("button.palco-play", { type: "button" });
+    function pintarBotao() {
+      U.limpar(botao);
+      botao.appendChild(ic(rodando ? "pausa" : "tocar"));
+      botao.appendChild(h("span", rodando ? "Pausar" : "Reproduzir"));
+      botao.setAttribute("aria-label", rodando ? "Pausar a animação" : "Reproduzir a animação");
+      botao.classList.toggle("destaque", !rodando);
+    }
+    botao.addEventListener("click", () => {
+      rodando = !rodando;
+      try { localStorage.setItem("ci:animacao", rodando ? "rodando" : "parado"); } catch (_) {}
+      pintarBotao();
+    });
+    pintarBotao();
+
+    let tCena = rodando ? 300 : 4450;      // parado, mostra o quadro da comemoração
     let anterior = performance.now();
-    const origem = performance.now() - 300;     // já começa com ele entrando
+    let jaApareceu = false;
+    let precisaPintar = true;
+
     function quadro(agora) {
-      if (!cv.isConnected) return;              // trocou de tela: encerra
+      if (cv.isConnected) jaApareceu = true;
+      else if (jaApareceu) return;         // saiu da tela: encerra o laço
       const dt = Math.min((agora - anterior) / 1000, .05);
       anterior = agora;
-      ajustar();
-      desenharCena((agora - origem) % DUR_CICLO, dt);
+      const redimensionou = ajustar();
+      if (rodando) { tCena = (tCena + dt * 1000) % DUR_CICLO; precisaPintar = true; }
+      if (precisaPintar || redimensionou) {
+        desenharCena(tCena, rodando ? dt : 0);
+        precisaPintar = rodando;
+      }
       requestAnimationFrame(quadro);
     }
     requestAnimationFrame(quadro);
 
-    return cv;
+    cv.__cena = desenharCena;        // usado só para inspecionar quadros isolados
+    return h("div", { estilo: { position: "relative" } }, cv, botao);
   }
 
   function vInicio() {
@@ -2209,7 +2445,7 @@ CI.views = (function () {
         h("div.palco",
           palcoAnimado(),
           h("div.palco-rodape",
-            h("span.rotulo", "cinco projetos, um gerente de inovação"),
+            h("span.rotulo", "cinco projetos, três pessoas, nenhuma caixa no chão"),
             h("span.rotulo", { estilo: { color: "var(--accent)" } }, "equilíbrio: instável"))
         ),
 
