@@ -1040,6 +1040,69 @@ table.tabela tbody tr:last-child td { border-bottom: 0; }
   }
 }
 
+/* --- 23. PÁGINA INICIAL --------------------------------------------------- */
+
+.inicio {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 24px; padding: 26px 0 44px; text-align: center;
+}
+
+.inicio h1 {
+  font-size: clamp(34px, 6.2vw, 60px);
+  line-height: 1.02; letter-spacing: -.042em;
+  max-width: 16ch;
+}
+.inicio h1 em {
+  font-style: normal;
+  background: linear-gradient(96deg, var(--accent), var(--d-ouro) 55%, var(--d-agua));
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+}
+.inicio .chamada {
+  max-width: 54ch; color: var(--txt-2);
+  font-size: clamp(14px, 1.5vw, 16.5px); line-height: 1.62;
+}
+
+/* o palco da animação */
+.palco {
+  position: relative; width: 100%; max-width: 720px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  padding: 10px 10px 6px;
+  overflow: hidden;
+}
+.palco::before {
+  content: ""; position: absolute; inset: -40% 20% auto 20%; height: 70%;
+  background: radial-gradient(60% 60% at 50% 50%, var(--accent-wash), transparent 70%);
+  pointer-events: none;
+}
+.palco svg { display: block; width: 100%; height: auto; position: relative; }
+.palco-rodape {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 4px 8px 6px; font-size: 10px;
+}
+
+.inicio-acoes { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+
+.inicio-nums {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(146px, 1fr));
+  gap: 1px; background: var(--line-soft);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  overflow: hidden; width: 100%; max-width: 880px;
+}
+.inicio-num { background: var(--panel); padding: 15px 14px; text-align: left; }
+.inicio-num b {
+  display: block; font: 800 26px/1 var(--f-display);
+  letter-spacing: -.032em; font-variant-numeric: tabular-nums; color: var(--txt);
+}
+.inicio-num span { display: block; margin-top: 6px; }
+
+@media (max-width: 560px) {
+  .inicio { padding-top: 12px; gap: 20px; }
+  .palco { padding: 6px 6px 2px; border-radius: var(--r-lg); }
+}
+
 /* --- 22. RESPONSIVO ------------------------------------------------------- */
 
 .abrir-rail { display: none; }
