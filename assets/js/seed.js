@@ -50,7 +50,9 @@ window.CI_SEED = (function () {
       equipe: "Diretores, Coordenadores, Gerentes e Assessores (do 1º PSel)",
       professor_apoiador: "", responsavel: "Gerente de Inovação",
       metodologia: "SCRUM (reuniões diárias e semanais) e Inteligência Artificial",
-      inicio: "2027-04-14", termino: "2027-07-30", cor: ""
+      inicio: "2027-04-14", termino: "2027-07-30", cor: "",
+      // a planilha diz "DIRETORIA: Todas" — entra no quadro de todas, contando uma vez
+      diretorias_apoio: [D.pres, D.jf, D.gp, D.com, D.mkt, D.proj, D.top]
     },
     {
       id: "proj-inner", codigo: "2.0", nome: "INNER of Mind", diretoria_id: D.top,
@@ -68,7 +70,8 @@ window.CI_SEED = (function () {
       equipe: "Gerente de Inovação e de DHO, assessores de P&D e de Gestão de Pessoas",
       professor_apoiador: "", responsavel: "Gerente de DHO",
       metodologia: "SCRUM (reuniões diárias e semanais) e Gestão do Conhecimento",
-      inicio: "2027-01-15", termino: "2027-03-24", cor: ""
+      inicio: "2027-01-15", termino: "2027-03-24", cor: "",
+      diretorias_apoio: [D.pres]
     },
     {
       id: "proj-crm", codigo: "4.0", nome: "CRM Integrada", diretoria_id: D.conex,
@@ -77,7 +80,8 @@ window.CI_SEED = (function () {
       equipe: "Diretores, Gerentes e assessores de Marketing e Comercial",
       professor_apoiador: "", responsavel: "Diretoria Comercial",
       metodologia: "SCRUM (reuniões diárias e semanais) e Funil Y",
-      inicio: "2027-01-15", termino: "2027-03-24", cor: ""
+      inicio: "2027-01-15", termino: "2027-03-24", cor: "",
+      diretorias_apoio: [D.com, D.mkt]
     },
     {
       id: "proj-melhoria", codigo: "5.0", nome: "Melhoria dos Processos", diretoria_id: D.jf,
@@ -122,7 +126,8 @@ window.CI_SEED = (function () {
       metodologia: "", inicio: "", termino: "", cor: "" },
     { id: "proj-stakeholders", nome: "Mapeamento dos Stakeholders", diretoria_id: D.conex, tipo: "Iniciativa",
       prioridade: "Média", status: "Planejado", objetivo: "", equipe: "", responsavel: "",
-      metodologia: "", inicio: "", termino: "", cor: "" },
+      metodologia: "", inicio: "", termino: "", cor: "",
+      diretorias_apoio: [D.com, D.mkt, D.pres] },
     { id: "proj-funily", nome: "Funil Y", diretoria_id: D.mkt, tipo: "Iniciativa",
       prioridade: "Média", status: "Planejado", objetivo: "", equipe: "", responsavel: "",
       metodologia: "", inicio: "", termino: "", cor: "" },
@@ -192,30 +197,19 @@ window.CI_SEED = (function () {
   ];
 
   /* Quadro das diretorias (INICIATIVAS | PROJETOS INTERNOS | PONTOS DE ATENÇÃO | ...) */
-  const itens_diretoria = [
-    { id: "itd-1",  diretoria_id: D.pres,  coluna: "Projetos Internos", titulo: "Imersão", projeto_id: "proj-imersao", responsavel: "Presidência", ordem: 0 },
-    { id: "itd-2",  diretoria_id: D.jf,    coluna: "Projetos Internos", titulo: "Melhoria dos Processos", projeto_id: "proj-melhoria", responsavel: "Jurídico-Financeiro", ordem: 0 },
-    { id: "itd-3",  diretoria_id: D.jf,    coluna: "Projetos Internos", titulo: "Banco de dados (clientes)", projeto_id: "proj-bancodados", responsavel: "Jurídico-Financeiro", ordem: 1 },
-    { id: "itd-4",  diretoria_id: D.jf,    coluna: "Projetos Internos", titulo: "Gestão e Construção", projeto_id: "proj-gestaoconstrucao", responsavel: "Jurídico-Financeiro", ordem: 2 },
-    { id: "itd-5",  diretoria_id: D.gp,    coluna: "Projetos Internos", titulo: "Calendarização das capacitações", projeto_id: "proj-capacitacoes", responsavel: "Gestão de Pessoas", ordem: 0 },
-    { id: "itd-6",  diretoria_id: D.gp,    coluna: "Pontos de Atenção", titulo: "Manual do cluster", projeto_id: "proj-manualcluster", responsavel: "Gestão de Pessoas", ordem: 0 },
-    { id: "itd-7",  diretoria_id: D.com,   coluna: "Iniciativas", titulo: "Consulta por CNPJ", projeto_id: "proj-cnpj", responsavel: "Comercial", ordem: 0 },
-    { id: "itd-8",  diretoria_id: D.mkt,   coluna: "Iniciativas", titulo: "Funil Y", projeto_id: "proj-funily", responsavel: "Marketing", ordem: 0 },
-    { id: "itd-9",  diretoria_id: D.mkt,   coluna: "Pontos de Atenção", titulo: "Coleta de dados (Tráfego Pago)", projeto_id: "proj-trafegopago", responsavel: "Marketing", ordem: 1 },
-    { id: "itd-10", diretoria_id: D.proj,  coluna: "Projetos Internos", titulo: "Inovação dos Módulos", projeto_id: "proj-modulos", responsavel: "Projetos", ordem: 0 },
-    { id: "itd-11", diretoria_id: D.proj,  coluna: "Iniciativas", titulo: "Adecon constrói", projeto_id: "proj-adeconconstroi", responsavel: "Projetos", ordem: 1 },
-    { id: "itd-12", diretoria_id: D.top,   coluna: "Projetos Internos", titulo: "INNER of Mind", projeto_id: "proj-inner", responsavel: "TOP of Mind", ordem: 0 },
-    { id: "itd-13", diretoria_id: D.conex, coluna: "Projetos Internos", titulo: "HACKADECON", projeto_id: "proj-hackadecon", responsavel: "Gerência de Inovação", ordem: 0 },
-    { id: "itd-14", diretoria_id: D.conex, coluna: "Projetos Internos", titulo: "CRM Integrada", projeto_id: "proj-crm", responsavel: "Comercial e Marketing", ordem: 1 },
-    { id: "itd-15", diretoria_id: D.conex, coluna: "Iniciativas", titulo: "Mapeamento dos Stakeholders", projeto_id: "proj-stakeholders", responsavel: "Diretorias em Conexão", ordem: 2 }
-  ];
+  /* O quadro das diretorias é montado a partir dos projetos e das
+     implementações acima. Esta tabela guarda só anotações livres. */
+  const itens_diretoria = [];
+
 
   /* Base do indicador TIP — alimente conforme as ferramentas forem entrando */
   const implementacoes = [
     { id: "imp-1", tipo: "Ferramenta", nome: "Central de Inovação (este painel)", responsavel: "Gerência de Inovação",
-      status: "Em teste", diretoria_id: D.conex, relatorio_url: "", data_implementacao: "" },
+      status: "Em teste", diretoria_id: D.conex, relatorio_url: "", data_implementacao: "",
+      diretorias_apoio: [D.pres, D.jf, D.gp, D.com, D.mkt, D.proj, D.top] },
     { id: "imp-2", tipo: "Processo", nome: "Repasse semanal de projetos internos", responsavel: "Gerência de Inovação",
-      status: "Proposto", diretoria_id: D.conex, relatorio_url: "", data_implementacao: "" }
+      status: "Proposto", diretoria_id: D.conex, relatorio_url: "", data_implementacao: "",
+      diretorias_apoio: [D.pres, D.proj, D.top] }
   ];
 
   const avaliacoes = [];
