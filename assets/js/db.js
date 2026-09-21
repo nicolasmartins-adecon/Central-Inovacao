@@ -307,6 +307,50 @@ CI.db = (function () {
     return removido;
   };
 
+  /**
+   * Grava a nova sequência das etapas de um projeto.
+   * `ids` é a lista COMPLETA das etapas na ordem desejada. Renumera 1..N para
+   * que o número mostrado na trilha (e citado nos e-mails) siga a ordem real.
+   * Não toca em responsável nem em data, então não dispara notificação.
+   */
+  api.reordenarEtapas = async function (projetoId, ids) {
+    const mudancas = [];
+    ids.forEach((id, i) => {
+      const e = api.dados.etapas.find(x => x.id === id && x.projeto_id === projetoId);
+      if (!e) return;
+      if (e.ordem !== i || Number(e.numero) !== i + 1) mudancas.push({ id, ordem: i, numero: i + 1 });
+    });
+    if (!mudancas.length) return 0;
+
+    const antes = mudancas.map(m => {
+      const e = api.dados.etapas.find(x => x.id === m.id);
+      return { id: m.id, ordem: e.ordem, numero: e.numero };
+    });
+    const aplicar = lista => lista.forEach(m => {
+      const e = api.dados.etapas.find(x => x.id === m.id);
+      if (e) { e.ordem = m.ordem; e.numero = m.numero; }
+    });
+
+    aplicar(mudancas);              // otimista: a tela responde na hora
+    persistirLocal();
+    api.emitir();
+
+    if (api.motor === "supabase") {
+      try {
+        for (const m of mudancas) {
+          const { error } = await api.sb.from("etapas")
+            .update({ ordem: m.ordem, numero: m.numero }).eq("id", m.id);
+          if (error) throw new Error(error.message);
+        }
+      } catch (e) {
+        aplicar(antes);             // desfaz se o banco recusar
+        api.emitir();
+        throw e;
+      }
+    }
+    return mudancas.length;
+  };
+
   /* ---- autenticação ----------------------------------------------------- */
 
   api.entrarComLink = async function (email) {
