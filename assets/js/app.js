@@ -11,6 +11,8 @@ CI.app = (function () {
   const V = CI.views;
 
   const ROTAS = [
+    { id: "inicio",        hash: "#/inicio",        nome: "Início",        icone: "raio",       grupo: "Acompanhar",
+      titulo: "Central de Inovação", rotulo: "página inicial" },
     { id: "painel",        hash: "#/painel",        nome: "Painel",        icone: "painel",     grupo: "Acompanhar",
       titulo: "Painel de controle", rotulo: "visão geral do ciclo" },
     { id: "cronograma",    hash: "#/cronograma",    nome: "Cronograma",    icone: "cronograma", grupo: "Acompanhar",
@@ -233,14 +235,14 @@ CI.app = (function () {
   /* ---- roteador ----------------------------------------------------------- */
 
   function lerHash() {
-    const bruto = (location.hash || "#/painel").replace(/^#\/?/, "");
+    const bruto = (location.hash || "#/inicio").replace(/^#\/?/, "");
     const [nome, param] = bruto.split("/");
-    return { nome: nome || "painel", param: param || null };
+    return { nome: nome || "inicio", param: param || null };
   }
 
   function navegar() {
     const { nome, param } = lerHash();
-    rotaAtual = ROTAS.some(r => r.id === nome) || nome === "projeto" ? nome : "painel";
+    rotaAtual = ROTAS.some(r => r.id === nome) || nome === "projeto" ? nome : "inicio";
     paramAtual = param;
     U.fecharGaveta(true);
     U.fecharModal(true);
@@ -255,6 +257,7 @@ CI.app = (function () {
 
     try {
       switch (rotaAtual) {
+        case "painel":        no = V.vPainel(); break;
         case "cronograma":    no = V.vCronograma(); break;
         case "projetos":      no = V.vProjetos(); break;
         case "projeto":       no = V.vProjeto(paramAtual); break;
@@ -262,7 +265,7 @@ CI.app = (function () {
         case "implementacao": no = V.vImplementacao(); break;
         case "indicadores":   no = V.vIndicadores(); break;
         case "config":        no = V.vConfig(); break;
-        default:              no = V.vPainel(); rotaAtual = "painel";
+        default:              no = V.vInicio(); rotaAtual = "inicio";
       }
     } catch (err) {
       console.error(err);
