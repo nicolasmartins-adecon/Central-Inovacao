@@ -682,9 +682,14 @@ CI.views = (function () {
           h("button.btn.btn-p", { type: "button", onclick: () => modalEtapa(p.id) }, ic("mais"), "Etapa")
         )
       ),
+      etapas.length > 1
+        ? h("p.discreto", {
+            estilo: { fontSize: "11.5px", padding: "9px 16px", borderBottom: "1px solid var(--line-soft)" }
+          }, "Arraste pela alça à esquerda para reordenar. A numeração se ajusta sozinha.")
+        : null,
       h("div.painel-bd.sem-pad",
         etapas.length
-          ? h("div.trilha", ...etapas.map(e => linhaEtapa(e, p)))
+          ? trilhaOrdenavel(p, etapas)
           : U.vazio("cronograma", "Nenhuma etapa ainda",
               "Quebre o projeto em entregas com responsável e data. É isso que alimenta o cronograma e os avisos por e-mail.",
               h("button.btn.btn-primario", { type: "button", onclick: () => modalEtapa(p.id) }, ic("mais"), "Criar primeira etapa"))
@@ -705,8 +710,22 @@ CI.views = (function () {
     const nComentarios = db.comentariosDe(e.id).length;
     const atrasada = etapaAtrasada(e);
     return h("div.etapa" + (e.concluida ? ".feita" : "") + (atrasada ? ".atrasada" : ""), {
-      onclick: ev => { if (!ev.target.closest(".marcador")) gavetaEtapa(e.id); }
+      dataset: { id: e.id },
+      onclick: ev => {
+        if (ev.target.closest(".marcador") || ev.target.closest(".etapa-puxador")) return;
+        gavetaEtapa(e.id);
+      }
     },
+      h("button.etapa-puxador", {
+        type: "button",
+        "aria-label": `Mover a etapa ${e.numero}. Use as setas para cima e para baixo.`,
+        title: "Arraste para reordenar (ou use as setas do teclado)",
+        onkeydown: ev => {
+          if (ev.key !== "ArrowUp" && ev.key !== "ArrowDown") return;
+          ev.preventDefault();
+          moverEtapaTeclado(e, ev.key === "ArrowUp" ? -1 : 1);
+        }
+      }, ic("arrastar")),
       h("div.etapa-no",
         h("button.marcador", {
           type: "button",
@@ -732,6 +751,117 @@ CI.views = (function () {
         ic("setaDir")
       )
     );
+  }
+
+  /* ---- reordenação da trilha -------------------------------------------
+     Arrastar move o nó de verdade no DOM; ao soltar, a nova sequência é
+     gravada. Quando as concluídas estão escondidas, a lista completa é
+     remontada mantendo cada etapa oculta ancorada à visível que a precedia.
+     ---------------------------------------------------------------------- */
+
+  function trilhaOrdenavel(projeto, etapasVisiveis) {
+    const trilha = h("div.trilha", ...etapasVisiveis.map(e => linhaEtapa(e, projeto)));
+    ligarReordenacao(trilha, projeto.id);
+    return trilha;
+  }
+
+  function ordemCompleta(projetoId, idsVisiveis) {
+    const todas = db.etapasDe(projetoId).map(e => e.id);
+    const visivel = new Set(idsVisiveis);
+    const cabeca = [];
+    const reboque = new Map();      // id visível -> ocultas que vinham logo depois
+    let atual = null;
+    todas.forEach(id => {
+      if (visivel.has(id)) { atual = id; reboque.set(id, []); }
+      else if (atual === null) cabeca.push(id);
+      else reboque.get(atual).push(id);
+    });
+    const saida = [...cabeca];
+    idsVisiveis.forEach(id => {
+      saida.push(id);
+      (reboque.get(id) || []).forEach(o => saida.push(o));
+    });
+    return saida;
+  }
+
+  async function gravarOrdem(projetoId, trilha) {
+    const visiveis = [...trilha.querySelectorAll(".etapa")].map(el => el.dataset.id);
+    try {
+      const n = await db.reordenarEtapas(projetoId, ordemCompleta(projetoId, visiveis));
+      if (n) U.aviso("Ordem das etapas atualizada", "ok");
+    } catch (err) {
+      U.aviso("Não deu para salvar a ordem: " + err.message, "erro");
+    }
+    CI.app.recarregarVista();
+  }
+
+  function ligarReordenacao(trilha, projetoId) {
+    let linha = null, rolador = null, autoRolagem = 0;
+
+    trilha.addEventListener("pointerdown", ev => {
+      const alca = ev.target.closest(".etapa-puxador");
+      if (!alca || ev.button !== 0) return;
+      linha = alca.closest(".etapa");
+      if (!linha) return;
+      rolador = trilha.closest(".conteudo");
+      linha.classList.add("movendo");
+      trilha.classList.add("reordenando");
+      linha.style.pointerEvents = "none";   // libera elementFromPoint
+      alca.setPointerCapture(ev.pointerId);
+      ev.preventDefault();
+    });
+
+    trilha.addEventListener("pointermove", ev => {
+      if (!linha) return;
+      ev.preventDefault();
+
+      const sob = document.elementFromPoint(ev.clientX, ev.clientY);
+      const alvo = sob && sob.closest(".etapa");
+      if (alvo && alvo !== linha && alvo.parentElement === trilha) {
+        const meio = alvo.getBoundingClientRect().top + alvo.offsetHeight / 2;
+        trilha.insertBefore(linha, ev.clientY < meio ? alvo : alvo.nextSibling);
+      }
+
+      // rola sozinho perto das bordas
+      if (rolador) {
+        const r = rolador.getBoundingClientRect();
+        if (ev.clientY < r.top + 70) autoRolagem = -14;
+        else if (ev.clientY > r.bottom - 70) autoRolagem = 14;
+        else autoRolagem = 0;
+        if (autoRolagem) rolador.scrollTop += autoRolagem;
+      }
+    });
+
+    const soltar = () => {
+      if (!linha) return;
+      linha.style.pointerEvents = "";
+      linha.classList.remove("movendo");
+      trilha.classList.remove("reordenando");
+      linha = null; autoRolagem = 0;
+      gravarOrdem(projetoId, trilha);
+    };
+
+    trilha.addEventListener("pointerup", soltar);
+    trilha.addEventListener("pointercancel", soltar);
+  }
+
+  /** Setas do teclado sobre a alça: acessível e bom para ajuste fino. */
+  async function moverEtapaTeclado(etapa, passo) {
+    const visiveis = db.etapasDe(etapa.projeto_id)
+      .filter(e => mostrarConcluidas || !e.concluida)
+      .map(e => e.id);
+    const i = visiveis.indexOf(etapa.id);
+    const j = i + passo;
+    if (i < 0 || j < 0 || j >= visiveis.length) return;
+    visiveis.splice(j, 0, visiveis.splice(i, 1)[0]);
+    try {
+      await db.reordenarEtapas(etapa.projeto_id, ordemCompleta(etapa.projeto_id, visiveis));
+      CI.app.recarregarVista();
+      setTimeout(() => {
+        const alvo = document.querySelector(`.etapa[data-id="${etapa.id}"] .etapa-puxador`);
+        alvo && alvo.focus();
+      }, 70);
+    } catch (err) { U.aviso(err.message, "erro"); }
   }
 
   async function alternarEtapa(e) {
