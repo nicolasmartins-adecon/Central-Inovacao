@@ -1779,8 +1779,464 @@ CI.views = (function () {
     return res.slice(0, 12);
   }
 
+  /* =========================================================================
+     PÁGINA INICIAL — o mascote equilibrista
+     Loop de 6 s em canvas, animado por curvas (nada de CSS keyframe solto):
+       0.00–0.90  entra correndo e freia derrapando
+       1.00–2.15  as cinco caixas caem e se empilham na cabeça
+       2.45–3.65  a torre tomba, ele entra em pânico
+       3.65–4.18  salvamento elástico
+       4.18–5.25  pulo de comemoração e confete
+       5.25–6.00  sai correndo de quadro e o laço recomeça
+     ====================================================================== */
+
+  const DUR_CICLO = 6000;
+
+  /* --- curvas ------------------------------------------------------------ */
+  const sat01 = t => (t < 0 ? 0 : t > 1 ? 1 : t);
+  const saiCubica  = t => 1 - Math.pow(1 - t, 3);
+  const entraCubica = t => t * t * t;
+  const entraQuad  = t => t * t;
+  const suave      = t => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  const saiCostas  = t => { const c = 1.9; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+  const saiElastica = t => (t === 0 || t === 1) ? t
+    : Math.pow(2, -9 * t) * Math.sin((t * 10 - .75) * (2 * Math.PI / 3)) + 1;
+
+  /** Curva por quadros-chave: kf(t, [[ms, valor, easing?], ...]) */
+  function kf(t, pontos) {
+    if (t <= pontos[0][0]) return pontos[0][1];
+    for (let i = 1; i < pontos.length; i++) {
+      if (t <= pontos[i][0]) {
+        const [a, va] = pontos[i - 1];
+        const [b, vb, e] = pontos[i];
+        const u = (t - a) / (b - a);
+        return va + (vb - va) * (e ? e(u) : u);
+      }
+    }
+    return pontos[pontos.length - 1][1];
+  }
+
+  /** Oscilação amortecida — o tremor da torre a cada caixa que encaixa. */
+  function tremor(t, impacto, amp, hz = 4.2, queda = 7) {
+    const d = (t - impacto) / 1000;
+    if (d < 0 || d > 1.2) return 0;
+    return amp * Math.exp(-queda * d) * Math.sin(2 * Math.PI * hz * d);
+  }
+
+  function escurecer(hex, f) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim());
+    if (!m) return hex;
+    const n = parseInt(m[1], 16);
+    const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+      .map(v => Math.round(v * (1 - f)).toString(16).padStart(2, "0"));
+    return "#" + c.join("");
+  }
+
+  function palcoAnimado() {
+    const LW = 560, LH = 262, CHAO = 214;
+
+    const cv = h("canvas", {
+      role: "img",
+      "aria-label": "Animação: um mascote equilibra uma torre de caixas coloridas na cabeça, " +
+                    "quase derruba tudo, salva no último instante e comemora.",
+      estilo: { display: "block", width: "100%", height: "auto", aspectRatio: "560 / 262" }
+    });
+    const ctx = cv.getContext("2d");
+
+    const raiz = getComputedStyle(document.documentElement);
+    const tok = (n, alt) => (raiz.getPropertyValue(n).trim() || alt);
+    const C = {
+      acento: tok("--accent", "#FF5A1F"),
+      linha:  tok("--line", "#1E2A38"),
+      suave:  tok("--line-soft", "#16202C"),
+      fraco:  tok("--faint", "#57677A"),
+      txt:    tok("--txt", "#E7EDF4")
+    };
+    C.sombra = escurecer(C.acento, .38);
+    C.pe = escurecer(C.acento, .52);
+
+    /* as caixas são as diretorias (sem laranja: essa cor é do mascote) */
+    const CAIXAS = [
+      { cor: U.corVisivel("#06B6D4"), larg: 56 },
+      { cor: U.corVisivel("#2563EB"), larg: 47 },
+      { cor: U.corVisivel("#F2C200"), larg: 53 },
+      { cor: U.corVisivel("#0FA34F"), larg: 42 },
+      { cor: U.corVisivel("#5B21B6"), larg: 50 }
+    ];
+    const CX_H = 19, CX_GAP = 3;
+    const QUEDA = CAIXAS.map((_, i) => 1000 + i * 205);   // quando cada caixa cai
+
+    /* partículas: poeira da freada, confete e brilho do salvamento */
+    const pos = Array.from({ length: 46 }, () => ({ vida: 0 }));
+    let soltas = { poeira: -1, confete: -1, brilho: -1 };
+
+    function soltar(tipo, n, gerar) {
+      let feitas = 0;
+      for (let i = 0; i < pos.length && feitas < n; i++) {
+        if (pos[i].vida > 0) continue;
+        Object.assign(pos[i], gerar(feitas), { tipo });
+        feitas++;
+      }
+    }
+
+    /* --- desenho ---------------------------------------------------------- */
+
+    function retanguloArredondado(x, y, w, hh, r) {
+      const k = Math.min(r, Math.abs(w) / 2, Math.abs(hh) / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + k, y);
+      ctx.arcTo(x + w, y, x + w, y + hh, k);
+      ctx.arcTo(x + w, y + hh, x, y + hh, k);
+      ctx.arcTo(x, y + hh, x, y, k);
+      ctx.arcTo(x, y, x + w, y, k);
+      ctx.closePath();
+    }
+
+    function desenharCena(t, dt) {
+      ctx.clearRect(0, 0, LW, LH);
+
+      /* ---------- parâmetros animados ---------- */
+      const x = kf(t, [
+        [0, -110], [900, 284, saiCubica], [5250, 284],
+        [5450, 248, saiCubica], [6000, 730, entraCubica]      // recua e dispara
+      ]);
+
+      const pulo = kf(t, [
+        [4340, 0], [4380, -4, saiCubica], [4560, 23, saiCubica],
+        [4820, 0, entraQuad], [4900, 0]
+      ]);
+
+      // achatamento do corpo: freada, cada caixa que encaixa, agachada e pulo
+      let apy = kf(t, [
+        [0, 1], [860, 1], [925, .80, saiCubica], [1060, 1.07, saiCubica], [1190, 1, saiCubica],
+        [4300, 1], [4380, .76, saiCubica], [4520, 1.15, saiCubica], [4780, 1, saiCubica],
+        [4830, .84, saiCubica], [4960, 1.04, saiCubica], [5080, 1, saiCubica]
+      ]);
+      QUEDA.forEach(q => { apy += tremor(t, q + 240, -.05, 5.5, 9); });
+      const apx = 1 + (1 - apy) * .72;
+
+      const inclina = kf(t, [
+        [0, .21], [700, .21], [890, -.30, saiCubica], [1080, .06, saiCubica], [1220, 0, saiCubica],
+        [2450, 0], [2900, -.10, suave], [3650, -.32, suave],
+        [3880, .16, saiCostas], [4200, 0, saiElastica],
+        [5250, 0], [5460, .24, saiCubica]
+      ]);
+
+      let tomba = kf(t, [
+        [2380, 0], [2470, -.045, saiCubica],   // antecipação
+        [3350, .26, suave], [3650, .37, suave],
+        [3830, -.13, saiCubica], [4200, 0, saiElastica]
+      ]);
+      QUEDA.forEach(q => { tomba += tremor(t, q + 230, .055); });
+      if (t > 5250) tomba += Math.sin((t - 5250) / 48) * .05;      // balança na corrida
+
+      const panico = kf(t, [[2700, 0], [3120, 1, saiCubica], [3660, 1], [3880, 0, saiCubica]]);
+      const feliz  = kf(t, [[4160, 0], [4320, 1, saiCubica], [5320, 1], [5440, 0]]);
+      const corre  = (t < 820 || t > 5300) ? 1 : 0;
+      const passo  = t * 0.035;
+
+      /* ---------- disparos ---------- */
+      const volta = Math.floor(t / DUR_CICLO);
+      if (t > 860 && t < 1000 && soltas.poeira !== volta) {
+        soltas.poeira = volta;
+        soltar("poeira", 7, i => ({
+          vida: 1, dur: .55, x: x - 14 - i * 5, y: CHAO - 2,
+          vx: -40 - Math.random() * 70, vy: -12 - Math.random() * 26, r: 3 + Math.random() * 4
+        }));
+      }
+      if (t > 3860 && t < 3980 && soltas.brilho !== volta) {
+        soltas.brilho = volta;
+        soltar("brilho", 8, () => ({
+          vida: 1, dur: .5, x: x + (Math.random() - .5) * 70, y: 70 + Math.random() * 40,
+          vx: (Math.random() - .5) * 60, vy: -20 - Math.random() * 40, r: 2 + Math.random() * 2
+        }));
+      }
+      if (t > 4520 && t < 4620 && soltas.confete !== volta) {
+        soltas.confete = volta;
+        soltar("confete", 18, i => ({
+          vida: 1, dur: 1.5, x: x + (Math.random() - .5) * 40, y: CHAO - 170 - Math.random() * 30,
+          vx: (Math.random() - .5) * 230, vy: -90 - Math.random() * 130,
+          r: 2.4 + Math.random() * 2, giro: Math.random() * 6,
+          cor: [C.acento, ...CAIXAS.map(c => c.cor)][i % 6]
+        }));
+      }
+
+      /* ---------- chão ---------- */
+      const g = ctx.createLinearGradient(40, 0, LW - 40, 0);
+      g.addColorStop(0, "transparent");
+      g.addColorStop(.5, C.linha);
+      g.addColorStop(1, "transparent");
+      ctx.strokeStyle = g; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(40, CHAO + .5); ctx.lineTo(LW - 40, CHAO + .5); ctx.stroke();
+
+      /* sombra */
+      const alturaVoo = pulo / 23;
+      ctx.fillStyle = C.suave;
+      ctx.globalAlpha = .9 - alturaVoo * .45;
+      ctx.beginPath();
+      ctx.ellipse(x, CHAO + 3, 35 * apx * (1 - alturaVoo * .3), 6 * (1 - alturaVoo * .3), 0, 0, 7);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      /* ---------- traços de velocidade ---------- */
+      if (corre) {
+        ctx.strokeStyle = C.acento; ctx.lineWidth = 2; ctx.lineCap = "round";
+        for (let i = 0; i < 3; i++) {
+          const o = 34 + i * 16, dir = t > 5300 ? 1 : 1;
+          ctx.globalAlpha = .1 + .12 * ((Math.sin(t / 60 + i) + 1) / 2);
+          ctx.beginPath();
+          ctx.moveTo(x - o * dir - 26, CHAO - 42 - i * 20);
+          ctx.lineTo(x - o * dir, CHAO - 42 - i * 20);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      /* ---------- corpo ---------- */
+      const baseY = CHAO - pulo;
+      const pernaH = 18, corpoW = 63, corpoH = 53;
+
+      // pernas
+      const bal = corre ? Math.sin(passo) * 7 : Math.sin(t / 300) * 1.2;
+      const balPanico = panico ? Math.sin(t / 34) * 5 * panico : 0;
+      ctx.strokeStyle = C.pe; ctx.lineWidth = 7; ctx.lineCap = "round";
+      [-13, 13].forEach((dx, i) => {
+        const o = (i ? -1 : 1) * (bal + balPanico);
+        ctx.beginPath();
+        ctx.moveTo(x + dx, baseY - pernaH - 2);
+        ctx.lineTo(x + dx + o, baseY - (pulo > 2 ? 4 : 0));
+        ctx.stroke();
+      });
+
+      ctx.save();
+      ctx.translate(x, baseY - pernaH);
+      ctx.rotate(inclina * .35);
+      ctx.scale(apx, apy);
+
+      // tronco
+      ctx.fillStyle = C.acento;
+      retanguloArredondado(-corpoW / 2, -corpoH, corpoW, corpoH, 17);
+      ctx.fill();
+      // sombreado inferior, dá volume
+      ctx.fillStyle = C.sombra; ctx.globalAlpha = .28;
+      retanguloArredondado(-corpoW / 2, -corpoH * .38, corpoW, corpoH * .38, 15);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      // olhos
+      const ax = 14, ay = -corpoH + 21;
+      const arregala = 1 + panico * .45;
+      [-1, 1].forEach(s => {
+        if (feliz > .5) {
+          ctx.strokeStyle = "#11171E"; ctx.lineWidth = 2.6; ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.arc(s * ax, ay + 2, 7.4, Math.PI * 1.15, Math.PI * 1.85);
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = "#FFFFFF";
+          ctx.beginPath();
+          ctx.ellipse(s * ax, ay, 8.8 * arregala, 9.5 * arregala, 0, 0, 7);
+          ctx.fill();
+          const jx = panico * Math.sin(t / 32) * 1.6;
+          ctx.fillStyle = "#11171E";
+          ctx.beginPath();
+          ctx.ellipse(s * ax + jx + (corre ? 1.6 : 0), ay + panico * -1.2,
+                      4.2 * (1 - panico * .42), 4.5 * (1 - panico * .42), 0, 0, 7);
+          ctx.fill();
+        }
+      });
+
+      // boca
+      ctx.strokeStyle = "#11171E"; ctx.lineWidth = 2.2; ctx.lineCap = "round";
+      const by = ay + 17;
+      if (panico > .35) {
+        ctx.fillStyle = "#11171E";
+        ctx.beginPath();
+        ctx.ellipse(0, by + 1, 4.2 * panico, 5.6 * panico, 0, 0, 7);
+        ctx.fill();
+      } else if (feliz > .35) {
+        ctx.beginPath();
+        ctx.arc(0, by - 4, 8 * feliz, .15 * Math.PI, .85 * Math.PI);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.arc(0, by - 2, 5.2, .2 * Math.PI, .8 * Math.PI);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      /* ---------- torre ---------- */
+      const topoCabeca = baseY - pernaH - corpoH * apy;
+      ctx.save();
+      ctx.translate(x, topoCabeca);
+      ctx.rotate(tomba);
+
+      // braços segurando a base da torre
+      ctx.strokeStyle = C.pe; ctx.lineWidth = 5.5; ctx.lineCap = "round";
+      const quantas = QUEDA.filter(q => t >= q + 200).length;
+      if (quantas) {
+        [-1, 1].forEach(s => {
+          ctx.beginPath();
+          ctx.moveTo(s * 28, 19);
+          ctx.quadraticCurveTo(s * 36, 3, s * 21, -5);
+          ctx.stroke();
+        });
+      }
+
+      let alturaAcum = 0;
+      CAIXAS.forEach((cx, i) => {
+        const t0 = QUEDA[i], t1 = t0 + 250;
+        const p = sat01((t - t0) / (t1 - t0));
+        if (p <= 0) { alturaAcum += CX_H + CX_GAP; return; }
+
+        const yFinal = -(i + 1) * (CX_H + CX_GAP);
+        const yy = yFinal - (1 - entraQuad(p)) * 200;
+        const impacto = tremor(t, t1, .18, 6, 11);
+        const sh = 1 + (p >= 1 ? impacto : 0);
+        const sw = 1 - (p >= 1 ? impacto * .8 : 0);
+        const gi = (i % 2 ? 1 : -1) * Math.sin(t / 420 + i) * 1.2;
+
+        ctx.save();
+        ctx.translate(gi, yy + CX_H / 2);
+        ctx.scale(sw, sh);
+        ctx.fillStyle = cx.cor;
+        retanguloArredondado(-cx.larg / 2, -CX_H / 2, cx.larg, CX_H, 4.5);
+        ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,.22)";
+        retanguloArredondado(-cx.larg / 2 + 4, -CX_H / 2 + 3.2, cx.larg - 8, 2.6, 1.3);
+        ctx.fill();
+        ctx.restore();
+        alturaAcum += CX_H + CX_GAP;
+      });
+      ctx.restore();
+
+      /* gota de suor no auge do pânico */
+      if (panico > .5) {
+        const gp = sat01((t - 3180) / 620);
+        ctx.fillStyle = "#8FD3F4";
+        ctx.globalAlpha = (1 - gp) * panico;
+        const gx = x + 30 + gp * 26, gy = topoCabeca + 26 - gp * 8 + gp * gp * 46;
+        ctx.beginPath();
+        ctx.ellipse(gx, gy, 3, 4.2, .5, 0, 7);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      /* ---------- partículas ---------- */
+      pos.forEach(pt => {
+        if (pt.vida <= 0) return;
+        pt.vida -= dt / pt.dur;
+        if (pt.vida <= 0) return;
+        pt.vx *= 0.99;
+        pt.vy += (pt.tipo === "poeira" ? 40 : pt.tipo === "brilho" ? 0 : 480) * dt;
+        pt.x += pt.vx * dt;
+        pt.y += pt.vy * dt;
+        ctx.globalAlpha = Math.min(1, pt.vida * 1.3);
+        if (pt.tipo === "poeira") {
+          ctx.fillStyle = C.fraco;
+          ctx.globalAlpha *= .4;
+          ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r * (2 - pt.vida), 0, 7); ctx.fill();
+        } else if (pt.tipo === "brilho") {
+          ctx.strokeStyle = C.acento; ctx.lineWidth = 1.6; ctx.lineCap = "round";
+          const s = pt.r * 2.2 * pt.vida;
+          ctx.beginPath();
+          ctx.moveTo(pt.x - s, pt.y); ctx.lineTo(pt.x + s, pt.y);
+          ctx.moveTo(pt.x, pt.y - s); ctx.lineTo(pt.x, pt.y + s);
+          ctx.stroke();
+        } else {
+          ctx.save();
+          ctx.translate(pt.x, pt.y);
+          ctx.rotate(pt.giro + (1 - pt.vida) * 9);
+          ctx.fillStyle = pt.cor;
+          ctx.fillRect(-pt.r, -pt.r * .6, pt.r * 2, pt.r * 1.2);
+          ctx.restore();
+        }
+        ctx.globalAlpha = 1;
+      });
+    }
+
+    /* --- laço -------------------------------------------------------------- */
+
+    function ajustar() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const larguraCss = cv.clientWidth || LW;
+      const alvoW = Math.round(larguraCss * dpr);
+      const alvoH = Math.round(larguraCss * (LH / LW) * dpr);
+      if (cv.width !== alvoW || cv.height !== alvoH) { cv.width = alvoW; cv.height = alvoH; }
+      const k = alvoW / LW;
+      ctx.setTransform(k, 0, 0, k, 0, 0);
+    }
+
+    const quieto = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (quieto) {
+      requestAnimationFrame(() => { ajustar(); desenharCena(4650, 0); });
+      return cv;
+    }
+
+    let anterior = performance.now();
+    const origem = performance.now() - 300;     // já começa com ele entrando
+    function quadro(agora) {
+      if (!cv.isConnected) return;              // trocou de tela: encerra
+      const dt = Math.min((agora - anterior) / 1000, .05);
+      anterior = agora;
+      ajustar();
+      desenharCena((agora - origem) % DUR_CICLO, dt);
+      requestAnimationFrame(quadro);
+    }
+    requestAnimationFrame(quadro);
+
+    return cv;
+  }
+
+  function vInicio() {
+    const projetos = db.dados.projetos;
+    const internos = projetos.filter(p => p.tipo === "Projeto Interno");
+    const etapas = db.dados.etapas;
+    const feitas = etapas.filter(e => e.concluida).length;
+
+    const numero = (valor, rotulo) => h("div.inicio-num",
+      h("b", String(valor)), h("span.rotulo", rotulo));
+
+    return h("div.view",
+      h("section.inicio",
+        h("span.rotulo", `${(window.CI_CONFIG || {}).EMPRESA || "Adecon"} · ciclo ${(window.CI_CONFIG || {}).ANO_CICLO || new Date().getFullYear()}`),
+        h("h1", "Uma empresa que ", h("em", "se planeja em voz alta")),
+        h("p.chamada",
+          "Os projetos internos das oito diretorias em um lugar só: cronograma por semana, ",
+          "etapas com dono e prazo, comentários onde a decisão acontece e os indicadores ",
+          "se atualizando conforme a execução anda."),
+
+        h("div.palco",
+          palcoAnimado(),
+          h("div.palco-rodape",
+            h("span.rotulo", "cinco projetos, um gerente de inovação"),
+            h("span.rotulo", { estilo: { color: "var(--accent)" } }, "equilíbrio: instável"))
+        ),
+
+        h("div.inicio-acoes",
+          h("button.btn.btn-primario", {
+            type: "button", onclick: () => (location.hash = "#/painel")
+          }, ic("painel"), "Abrir o painel"),
+          h("button.btn", {
+            type: "button", onclick: () => (location.hash = "#/cronograma")
+          }, ic("cronograma"), "Ver o cronograma"),
+          h("button.btn.btn-fantasma", {
+            type: "button", onclick: () => modalProjeto()
+          }, ic("mais"), "Criar um projeto")
+        ),
+
+        h("div.inicio-nums",
+          numero(internos.length, "projetos internos"),
+          numero(db.dados.diretorias.length, "diretorias"),
+          numero(etapas.length, "etapas mapeadas"),
+          numero(etapas.length ? Math.round((feitas / etapas.length) * 100) + "%" : "0%", "já concluído")
+        )
+      )
+    );
+  }
+
   return {
-    vPainel, vCronograma, vProjetos, vProjeto, vDiretorias, vImplementacao, vIndicadores, vConfig,
+    vInicio, vPainel, vCronograma, vProjetos, vProjeto, vDiretorias, vImplementacao, vIndicadores, vConfig,
     modalProjeto, modalEtapa, gavetaEtapa, buscaGlobal
   };
 })();
