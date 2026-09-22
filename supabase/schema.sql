@@ -106,6 +106,15 @@ create table if not exists public.projetos (
 );
 
 create index if not exists idx_projetos_diretoria on public.projetos(diretoria_id);
+
+-- Uma ação pode ser tocada por várias diretorias. `diretoria_id` é a responsável
+-- e `diretorias_apoio` guarda as demais. A ação continua sendo UMA linha, então
+-- os indicadores nunca a contam duas vezes; ela só aparece no quadro de cada
+-- diretoria envolvida.
+alter table public.projetos
+  add column if not exists diretorias_apoio uuid[] not null default '{}';
+create index if not exists idx_projetos_apoio
+  on public.projetos using gin (diretorias_apoio);
 create index if not exists idx_projetos_status    on public.projetos(status);
 
 -- 2.4 Etapas ------------------------------------------------------------------
@@ -186,6 +195,11 @@ create table if not exists public.implementacoes (
   criado_em           timestamptz not null default now()
 );
 
+alter table public.implementacoes
+  add column if not exists diretorias_apoio uuid[] not null default '{}';
+create index if not exists idx_implementacoes_apoio
+  on public.implementacoes using gin (diretorias_apoio);
+
 -- 2.8 Avaliações das diretorias (base do ISD) ---------------------------------
 create table if not exists public.avaliacoes (
   id            uuid primary key default gen_random_uuid(),
@@ -241,6 +255,22 @@ select
 from public.projetos p
 left join public.etapas e on e.projeto_id = p.id
 group by p.id, p.nome;
+
+-- 3.2 Participação: uma linha por (ação, diretoria envolvida) --------------
+-- Serve para listar o quadro de cada diretoria. Não use para contar: quem conta
+-- é a tabela de origem, onde cada ação é uma linha só.
+create or replace view public.vw_participacao as
+  select p.id as acao_id, 'projeto'::text as origem, p.nome, p.tipo::text as categoria,
+         d.id as diretoria_id, (d.id = p.diretoria_id) as responsavel
+  from public.projetos p
+  cross join lateral unnest(array[p.diretoria_id] || p.diretorias_apoio) as dir(id)
+  join public.diretorias d on d.id = dir.id
+union all
+  select i.id, 'implementacao', i.nome, i.tipo,
+         d.id, (d.id = i.diretoria_id)
+  from public.implementacoes i
+  cross join lateral unnest(array[i.diretoria_id] || i.diretorias_apoio) as dir(id)
+  join public.diretorias d on d.id = dir.id;
 
 -- 3.2 Indicadores (TIP, ISD, Inovação) ----------------------------------------
 create or replace view public.vw_indicadores as
