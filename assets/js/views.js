@@ -1903,66 +1903,36 @@ CI.views = (function () {
   }
 
   /* =========================================================================
-     PÁGINA INICIAL — o gerente de inovação e a equipe
-     Loop de 6,8 s em canvas, animado por curvas de easing:
-       0.00–0.90  o gerente entra correndo e freia derrapando
-       1.00–2.10  as cinco caixas dos projetos caem e se empilham
-       2.45–3.35  a torre tomba e a caixa de cima começa a escapar
-       3.15–3.65  os dois ajudantes entram correndo pelos lados
-       3.65–4.05  um escora a torre, o outro devolve a caixa no lugar
-       4.05–5.20  comemoração em trio, com confete
-       5.20–6.80  saem juntos de quadro e o laço recomeça
+     PÁGINA INICIAL — a rede das diretorias
+     As oito diretorias giram devagar num anel visto de perfil, ligadas a um
+     núcleo central. A cada 2,5 s uma conexão se acende entre duas delas e um
+     pulso percorre o traçado: é uma ação conjunta nascendo. Volta completa em
+     20 s, tudo calculado a partir do tempo — o laço fecha sem emenda.
      ====================================================================== */
 
-  const DUR_CICLO = 6380;
+  const DUR_CICLO = 20000;
 
-  /* --- curvas ------------------------------------------------------------ */
   const sat01 = t => (t < 0 ? 0 : t > 1 ? 1 : t);
   const saiCubica   = t => 1 - Math.pow(1 - t, 3);
   const entraCubica = t => t * t * t;
-  const entraQuad   = t => t * t;
   const suave       = t => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-  const saiCostas   = t => { const c = 1.9; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
-  const saiElastica = t => (t === 0 || t === 1) ? t
-    : Math.pow(2, -9 * t) * Math.sin((t * 10 - .75) * (2 * Math.PI / 3)) + 1;
 
-  /** Curva por quadros-chave: kf(t, [[ms, valor, easing?], ...]) */
-  function kf(t, pontos) {
-    if (t <= pontos[0][0]) return pontos[0][1];
-    for (let i = 1; i < pontos.length; i++) {
-      if (t <= pontos[i][0]) {
-        const [a, va] = pontos[i - 1];
-        const [b, vb, e] = pontos[i];
-        const u = (t - a) / (b - a);
-        return va + (vb - va) * (e ? e(u) : u);
-      }
-    }
-    return pontos[pontos.length - 1][1];
-  }
-
-  /** Oscilação amortecida — o tremor da torre a cada caixa que encaixa. */
-  function tremor(t, impacto, amp, hz = 4.2, queda = 7) {
-    const d = (t - impacto) / 1000;
-    if (d < 0 || d > 1.2) return 0;
-    return amp * Math.exp(-queda * d) * Math.sin(2 * Math.PI * hz * d);
-  }
-
-  function escurecer(hex, f) {
+  function comAlfa(hex, a) {
     const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim());
     if (!m) return hex;
     const n = parseInt(m[1], 16);
-    return "#" + [(n >> 16) & 255, (n >> 8) & 255, n & 255]
-      .map(v => Math.round(v * (1 - f)).toString(16).padStart(2, "0")).join("");
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
   }
 
   function palcoAnimado() {
-    const LW = 560, LH = 262, CHAO = 214;
+    const LW = 560, LH = 262;
+    const CX = 280, CY = 134, RX = 186, RY = 72;
 
     const cv = h("canvas", {
       role: "img",
-      "aria-label": "Animação: o gerente de inovação equilibra na cabeça uma torre com as caixas " +
-                    "dos projetos internos; quando ela começa a cair, dois colegas entram correndo, " +
-                    "escoram a torre e devolvem a caixa que escapou. Os três comemoram.",
+      "aria-label": "Animação: as oito diretorias da Adecon dispostas em um anel que gira " +
+                    "devagar, ligadas a um núcleo central. Conexões se acendem entre elas, " +
+                    "representando as ações tocadas em conjunto.",
       estilo: { display: "block", width: "100%", height: "auto", aspectRatio: "560 / 262" }
     });
     const ctx = cv.getContext("2d");
@@ -1973,398 +1943,191 @@ CI.views = (function () {
       acento: tok("--accent", "#FF5A1F"),
       linha:  tok("--line", "#1E2A38"),
       suave:  tok("--line-soft", "#16202C"),
-      fraco:  tok("--faint", "#57677A")
+      fraco:  tok("--faint", "#57677A"),
+      muted:  tok("--muted", "#7B8B9F"),
+      txt:    tok("--txt", "#E7EDF4"),
+      painel: tok("--panel", "#0D1219")
     };
 
-    /* elenco */
-    const GERENTE = { cor: C.acento, pe: escurecer(C.acento, .52), sombra: escurecer(C.acento, .38) };
-    const APOIO = [
-      { cor: U.corVisivel("#B79CF0"), lado: -1 },   // entra pela esquerda
-      { cor: U.corVisivel("#2DBFA8"), lado:  1 }    // entra pela direita
-    ].map(a => Object.assign(a, { pe: escurecer(a.cor, .45), sombra: escurecer(a.cor, .3) }));
+    /* as oito diretorias, na ordem do quadro */
+    const NOS = [
+      { sigla: "PRES",  cor: "#14161A" },
+      { sigla: "JF",    cor: "#0FA34F" },
+      { sigla: "GP",    cor: "#F2C200" },
+      { sigla: "COM",   cor: "#F5871F" },
+      { sigla: "MKT",   cor: "#B79CF0" },
+      { sigla: "PROJ",  cor: "#2563EB" },
+      { sigla: "TOP",   cor: "#5B21B6" },
+      { sigla: "CONEX", cor: "#06B6D4" }
+    ].map(n => Object.assign(n, { tom: U.corVisivel(n.cor) }));
 
-    /* as caixas são os projetos internos */
-    const CAIXAS = [
-      { cor: U.corVisivel("#06B6D4"), larg: 56 },
-      { cor: U.corVisivel("#2563EB"), larg: 47 },
-      { cor: U.corVisivel("#F2C200"), larg: 53 },
-      { cor: U.corVisivel("#0FA34F"), larg: 42 },
-      { cor: U.corVisivel("#5B21B6"), larg: 50 }
+    /* as conexões que se acendem, uma a cada 2,5 s — as reais do ciclo */
+    const LIGACOES = [
+      [7, 3], [7, 4], [2, 0], [7, 5], [1, 7], [6, 7], [7, 2], [5, 6]
     ];
-    const CX_H = 19, CX_GAP = 3;
-    const QUEDA = CAIXAS.map((_, i) => 1000 + i * 200);
+    const PASSO = DUR_CICLO / LIGACOES.length;
+    const DURA = 1750;      // quanto tempo cada conexão fica visível
 
-    const POSTO = 284;                 // onde o gerente para
-    const pos = Array.from({ length: 52 }, () => ({ vida: 0 }));
-    const soltas = { poeira: -1, poeiraA: -1, confete: -1, brilho: -1 };
+    const posicao = (i, giro) => {
+      const a = -Math.PI / 2 + (i / NOS.length) * Math.PI * 2 + giro;
+      return {
+        x: CX + RX * Math.cos(a),
+        y: CY + RY * Math.sin(a),
+        // quem está na frente do anel aparece maior e mais nítido
+        frente: (Math.sin(a) + 1) / 2,
+        a
+      };
+    };
 
-    function soltar(tipo, n, gerar) {
-      let feitas = 0;
-      for (let i = 0; i < pos.length && feitas < n; i++) {
-        if (pos[i].vida > 0) continue;
-        Object.assign(pos[i], gerar(feitas), { tipo });
-        feitas++;
-      }
+    /** Curva que passa por dentro do anel, entre dois nós. */
+    function pontoDaCurva(p0, p1, u) {
+      const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
+      const cx = mx + (CX - mx) * .62, cy = my + (CY - my) * .62;
+      const v = 1 - u;
+      return {
+        x: v * v * p0.x + 2 * v * u * cx + u * u * p1.x,
+        y: v * v * p0.y + 2 * v * u * cy + u * u * p1.y
+      };
     }
 
-    function rrect(x, y, w, hh, r) {
-      const k = Math.min(r, Math.abs(w) / 2, Math.abs(hh) / 2);
-      ctx.beginPath();
-      ctx.moveTo(x + k, y);
-      ctx.arcTo(x + w, y, x + w, y + hh, k);
-      ctx.arcTo(x + w, y + hh, x, y + hh, k);
-      ctx.arcTo(x, y + hh, x, y, k);
-      ctx.arcTo(x, y, x + w, y, k);
-      ctx.closePath();
-    }
-
-    /* ---------------------------------------------------------------------
-       Um boneco. Devolve a altura do topo da cabeça, que é onde a torre apoia.
-       --------------------------------------------------------------------- */
-    function boneco(o) {
-      const k = o.k ?? 1;
-      const pernaH = 18 * k, corpoW = 63 * k, corpoH = 53 * k;
-      const baseY = CHAO - (o.pulo || 0);
-      const apy = o.apy ?? 1, apx = o.apx ?? (1 + (1 - apy) * .72);
-
-      /* sombra */
-      const voo = (o.pulo || 0) / 26;
-      ctx.fillStyle = C.suave;
-      ctx.globalAlpha = .9 - voo * .45;
-      ctx.beginPath();
-      ctx.ellipse(o.x, CHAO + 3, 35 * k * apx * (1 - voo * .3), 6 * k * (1 - voo * .3), 0, 0, 7);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      /* pernas */
-      const bal = o.correndo ? Math.sin(o.passo) * 7 * k : Math.sin(o.passo * .12) * 1.2 * k;
-      const nervoso = (o.panico || 0) * Math.sin(o.passo * 3.4) * 5 * k;
-      const abre = o.escorando ? 6 * k : 0;
-      ctx.strokeStyle = o.pe; ctx.lineWidth = 7 * k; ctx.lineCap = "round";
-      [-13 * k, 13 * k].forEach((dx, i) => {
-        const s = (i ? -1 : 1);
-        ctx.beginPath();
-        ctx.moveTo(o.x + dx, baseY - pernaH - 2 * k);
-        ctx.lineTo(o.x + dx + s * (bal + nervoso) + (i ? abre : -abre), baseY - (o.pulo > 2 ? 4 : 0));
-        ctx.stroke();
-      });
-
-      ctx.save();
-      ctx.translate(o.x, baseY - pernaH);
-      ctx.rotate(o.inclina || 0);
-      ctx.scale(apx, apy);
-
-      /* tronco */
-      ctx.fillStyle = o.cor;
-      rrect(-corpoW / 2, -corpoH, corpoW, corpoH, 17 * k);
-      ctx.fill();
-      ctx.fillStyle = o.sombra; ctx.globalAlpha = .28;
-      rrect(-corpoW / 2, -corpoH * .38, corpoW, corpoH * .38, 15 * k);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      /* olhos */
-      const ax = 14 * k, ay = -corpoH + 21 * k;
-      const panico = o.panico || 0, feliz = o.feliz || 0;
-      const arregala = 1 + panico * .45;
-      [-1, 1].forEach(s => {
-        if (feliz > .5) {
-          ctx.strokeStyle = "#11171E"; ctx.lineWidth = 2.6 * k; ctx.lineCap = "round";
-          ctx.beginPath();
-          ctx.arc(s * ax, ay + 2 * k, 7.4 * k, Math.PI * 1.15, Math.PI * 1.85);
-          ctx.stroke();
-        } else {
-          ctx.fillStyle = "#FFFFFF";
-          ctx.beginPath();
-          ctx.ellipse(s * ax, ay, 8.8 * k * arregala, 9.5 * k * arregala, 0, 0, 7);
-          ctx.fill();
-          const jx = panico * Math.sin(o.passo * 3.6) * 1.6 * k;
-          ctx.fillStyle = "#11171E";
-          ctx.beginPath();
-          ctx.ellipse(s * ax + jx + (o.olhar || 0) * k, ay + panico * -1.2 * k + (o.olharY || 0) * k,
-                      4.2 * k * (1 - panico * .42), 4.5 * k * (1 - panico * .42), 0, 0, 7);
-          ctx.fill();
-        }
-      });
-
-      /* boca */
-      ctx.strokeStyle = "#11171E"; ctx.lineWidth = 2.2 * k; ctx.lineCap = "round";
-      const by = ay + 17 * k;
-      if (panico > .35) {
-        ctx.fillStyle = "#11171E";
-        ctx.beginPath();
-        ctx.ellipse(0, by + k, 4.2 * k * panico, 5.6 * k * panico, 0, 0, 7);
-        ctx.fill();
-      } else if (feliz > .35) {
-        ctx.beginPath();
-        ctx.arc(0, by - 4 * k, 8 * k * feliz, .15 * Math.PI, .85 * Math.PI);
-        ctx.stroke();
-      } else if (o.concentrado) {
-        ctx.beginPath();
-        ctx.moveTo(-4.5 * k, by - 1 * k); ctx.lineTo(4.5 * k, by - 1 * k);
-        ctx.stroke();
-      } else {
-        ctx.beginPath();
-        ctx.arc(0, by - 2 * k, 5.2 * k, .2 * Math.PI, .8 * Math.PI);
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      /* braços */
-      const topo = baseY - pernaH - corpoH * apy;
-      ctx.strokeStyle = o.pe; ctx.lineWidth = 5.5 * k; ctx.lineCap = "round";
-      if (o.bracos === "segura") {
-        [-1, 1].forEach(s => {
-          ctx.beginPath();
-          ctx.moveTo(o.x + s * 28 * k, topo + 19 * k);
-          ctx.quadraticCurveTo(o.x + s * 36 * k, topo + 3 * k, o.x + s * 21 * k, topo - 5 * k);
-          ctx.stroke();
-        });
-      } else if (o.bracos === "cima") {
-        // as duas mãos convergem num ponto só: é isso que lê como "escorando"
-        ctx.lineWidth = 6.5 * k;
-        const lado = o.empurraLado || 0;
-        const maoX = o.x + lado * k, maoY = topo - (o.empurraY || 18) * k;
-        [-1, 1].forEach((s, i) => {
-          ctx.beginPath();
-          ctx.moveTo(o.x + s * 22 * k, topo + 20 * k);
-          ctx.quadraticCurveTo(o.x + s * 26 * k + lado * .45 * k, topo + 6 * k,
-                               maoX + (i ? 7 : -7) * k, maoY);
-          ctx.stroke();
-        });
-        ctx.fillStyle = o.pe;
-        [-7, 7].forEach(dx => {
-          ctx.beginPath(); ctx.arc(maoX + dx * k, maoY, 4.6 * k, 0, 7); ctx.fill();
-        });
-      } else if (o.bracos === "aponta") {
-        ctx.beginPath();
-        ctx.moveTo(o.x - 24 * k, topo + 20 * k);
-        ctx.quadraticCurveTo(o.x - 32 * k, topo + 8 * k, o.x - 26 * k, topo - 6 * k);
-        ctx.stroke();
-      }
-
-      return topo;
-    }
-
-    /* ---------------------------------------------------------------------
-       A cena
-       --------------------------------------------------------------------- */
-    function desenharCena(t, dt) {
+    function desenharCena(t) {
       ctx.clearRect(0, 0, LW, LH);
+      const giro = (t / DUR_CICLO) * Math.PI * 2;
+      const pontos = NOS.map((_, i) => posicao(i, giro));
 
-      /* ------- gerente ------- */
-      const gx = kf(t, [
-        [0, -110], [900, POSTO, saiCubica], [5200, POSTO],
-        [5420, POSTO - 34, saiCubica], [6060, 700, entraCubica], [6380, 700]
-      ]);
-      const gPulo = kf(t, [
-        [4240, 0], [4290, -4, saiCubica], [4470, 23, saiCubica],
-        [4720, 0, entraQuad], [4800, 0]
-      ]);
-      let gApy = kf(t, [
-        [0, 1], [860, 1], [925, .80, saiCubica], [1060, 1.07, saiCubica], [1190, 1, saiCubica],
-        [4200, 1], [4290, .76, saiCubica], [4440, 1.15, saiCubica], [4700, 1, saiCubica],
-        [4740, .84, saiCubica], [4880, 1.04, saiCubica], [5000, 1, saiCubica]
-      ]);
-      QUEDA.forEach(q => { gApy += tremor(t, q + 235, -.05, 5.5, 9); });
+      /* trilho do anel */
+      ctx.strokeStyle = C.suave;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(CX, CY, RX, RY, 0, 0, Math.PI * 2);
+      ctx.stroke();
 
-      const gInclina = kf(t, [
-        [0, .21], [700, .21], [890, -.30, saiCubica], [1080, .06, saiCubica], [1220, 0, saiCubica],
-        [2450, 0], [2900, -.10, suave], [3350, -.32, suave],
-        [3900, .14, saiCostas], [4200, 0, saiElastica],
-        [5200, 0], [5450, .24, saiCubica]
-      ]);
-
-      const panicoG = kf(t, [[2650, 0], [3050, 1, saiCubica], [3700, 1], [3900, 0, saiCubica]]);
-      const felizG  = kf(t, [[4100, 0], [4260, 1, saiCubica], [5260, 1], [5400, 0]]);
-      const correG  = (t < 830 || t > 5400) ? 1 : 0;
-
-      /* ------- torre ------- */
-      let tomba = kf(t, [
-        [2380, 0], [2470, -.045, saiCubica],
-        [3350, .26, suave], [3560, .37, suave],
-        [3660, .34], [3860, -.12, saiCubica], [4180, 0, saiElastica]
-      ]);
-      QUEDA.forEach(q => { tomba += tremor(t, q + 230, .055); });
-      if (t > 5400) tomba += Math.sin((t - 5400) / 48) * .05;
-
-      // a caixa de cima escorrega e é devolvida pelo ajudante da direita
-      const escapa = kf(t, [[2700, 0], [3560, 22, suave], [3720, 26], [3980, 0, saiCostas]]);
-
-      /* ------- ajudantes ------- */
-      const chegaA = kf(t, [[3140, -110], [3620, POSTO - 72, saiCubica], [5250, POSTO - 72],
-                            [5500, POSTO - 120, saiCubica], [6150, -170, entraCubica], [6380, -170]]);
-      const chegaB = kf(t, [[3180, LW + 110], [3660, POSTO + 78, saiCubica], [5250, POSTO + 78],
-                            [5500, POSTO + 128, saiCubica], [6150, LW + 180, entraCubica], [6380, LW + 180]]);
-      const puloB = kf(t, [[3520, 0], [3640, 19, saiCubica], [3760, 0, entraQuad], [3820, 0]]);
-      const puloFesta = kf(t, [[4300, 0], [4460, 20, saiCubica], [4680, 0, entraQuad], [4760, 0]]);
-      const escora = kf(t, [[3600, 0], [3720, 1, saiCubica], [4260, 1], [4420, 0, saiCubica]]);
-      const felizApoio = kf(t, [[4180, 0], [4340, 1, saiCubica], [5280, 1], [5420, 0]]);
-
-      /* ------- disparos de partícula ------- */
-      const volta = Math.floor(t / 100);   // só para não repetir dentro do mesmo intervalo
-      if (t > 860 && t < 990 && soltas.poeira !== volta) {
-        soltas.poeira = volta;
-        soltar("poeira", 7, i => ({
-          vida: 1, dur: .55, x: gx - 14 - i * 5, y: CHAO - 2,
-          vx: -40 - Math.random() * 70, vy: -12 - Math.random() * 26, r: 3 + Math.random() * 4
-        }));
-      }
-      if (t > 3620 && t < 3740 && soltas.poeiraA !== volta) {
-        soltas.poeiraA = volta;
-        soltar("poeira", 8, i => ({
-          vida: 1, dur: .5, x: (i % 2 ? chegaA + 16 : chegaB - 16), y: CHAO - 2,
-          vx: (i % 2 ? 1 : -1) * (30 + Math.random() * 60), vy: -10 - Math.random() * 22,
-          r: 2.5 + Math.random() * 3
-        }));
-      }
-      if (t > 3880 && t < 3990 && soltas.brilho !== volta) {
-        soltas.brilho = volta;
-        soltar("brilho", 9, () => ({
-          vida: 1, dur: .5, x: gx + (Math.random() - .5) * 90, y: 60 + Math.random() * 60,
-          vx: (Math.random() - .5) * 60, vy: -20 - Math.random() * 40, r: 2 + Math.random() * 2
-        }));
-      }
-      if (t > 4440 && t < 4550 && soltas.confete !== volta) {
-        soltas.confete = volta;
-        soltar("confete", 22, i => ({
-          vida: 1, dur: 1.6, x: gx + (Math.random() - .5) * 150, y: CHAO - 170 - Math.random() * 40,
-          vx: (Math.random() - .5) * 240, vy: -90 - Math.random() * 140,
-          r: 2.4 + Math.random() * 2, giro: Math.random() * 6,
-          cor: [C.acento, APOIO[0].cor, APOIO[1].cor, ...CAIXAS.map(c => c.cor)][i % 8]
-        }));
-      }
-
-      /* ------- chão ------- */
-      const g = ctx.createLinearGradient(30, 0, LW - 30, 0);
-      g.addColorStop(0, "transparent"); g.addColorStop(.5, C.linha); g.addColorStop(1, "transparent");
-      ctx.strokeStyle = g; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(30, CHAO + .5); ctx.lineTo(LW - 30, CHAO + .5); ctx.stroke();
-
-      /* ------- traços de velocidade ------- */
-      function rastro(x, dir, alpha) {
-        if (alpha <= 0) return;
-        ctx.strokeStyle = C.acento; ctx.lineWidth = 2; ctx.lineCap = "round";
-        for (let i = 0; i < 3; i++) {
-          ctx.globalAlpha = alpha * (.12 + .12 * ((Math.sin(t / 60 + i) + 1) / 2));
-          ctx.beginPath();
-          ctx.moveTo(x - dir * (34 + i * 16) - dir * 26, CHAO - 40 - i * 18);
-          ctx.lineTo(x - dir * (34 + i * 16), CHAO - 40 - i * 18);
-          ctx.stroke();
-        }
-        ctx.globalAlpha = 1;
-      }
-      rastro(gx, 1, correG);
-      rastro(chegaA, 1, (t > 3140 && t < 3620) || (t > 5500 && t < 6150) ? .8 : 0);
-      rastro(chegaB, -1, (t > 3180 && t < 3660) || (t > 5500 && t < 6150) ? .8 : 0);
-
-      /* ------- ajudante da esquerda: escora ------- */
-      const kA = .72;
-      boneco({
-        x: chegaA, k: kA, cor: APOIO[0].cor, pe: APOIO[0].pe, sombra: APOIO[0].sombra,
-        pulo: puloFesta * felizApoio, apy: 1 - escora * .06,
-        inclina: escora * .30, passo: t * .035,
-        correndo: (t > 3140 && t < 3600) || (t > 5480 && t < 6150),
-        feliz: felizApoio, concentrado: escora > .5 && felizApoio < .3,
-        bracos: escora > .3 ? "cima" : "aponta",
-        empurraY: 34, empurraLado: 52, olhar: 3
-      });
-
-      /* ------- o gerente ------- */
-      const topoCabeca = boneco({
-        x: gx, k: 1, cor: GERENTE.cor, pe: GERENTE.pe, sombra: GERENTE.sombra,
-        pulo: gPulo, apy: gApy, inclina: gInclina * .35, passo: t * .035,
-        correndo: correG, panico: panicoG, feliz: felizG,
-        bracos: QUEDA.filter(q => t >= q + 200).length ? "segura" : null,
-        olhar: correG ? 1.6 : 0
-      });
-
-      /* ------- a torre ------- */
-      ctx.save();
-      ctx.translate(gx, topoCabeca);
-      ctx.rotate(tomba);
-      CAIXAS.forEach((cx, i) => {
-        const t0 = QUEDA[i], t1 = t0 + 250;
-        const p = sat01((t - t0) / (t1 - t0));
-        if (p <= 0) return;
-        const yFinal = -(i + 1) * (CX_H + CX_GAP);
-        const yy = yFinal - (1 - entraQuad(p)) * 200;
-        const impacto = tremor(t, t1, .18, 6, 11);
-        const sh = 1 + (p >= 1 ? impacto : 0);
-        const sw = 1 - (p >= 1 ? impacto * .8 : 0);
-        const deriva = (i % 2 ? 1 : -1) * Math.sin(t / 420 + i) * 1.2;
-        const fuga = i === 4 ? escapa : i === 3 ? escapa * .3 : 0;
-        ctx.save();
-        ctx.translate(deriva + fuga, yy + CX_H / 2);
-        ctx.rotate(fuga * .006);
-        ctx.scale(sw, sh);
-        ctx.fillStyle = cx.cor;
-        rrect(-cx.larg / 2, -CX_H / 2, cx.larg, CX_H, 4.5);
-        ctx.fill();
-        ctx.fillStyle = "rgba(255,255,255,.22)";
-        rrect(-cx.larg / 2 + 4, -CX_H / 2 + 3.2, cx.larg - 8, 2.6, 1.3);
-        ctx.fill();
-        ctx.restore();
-      });
-      ctx.restore();
-
-      /* ------- ajudante da direita: devolve a caixa ------- */
-      const kB = .72;
-      boneco({
-        x: chegaB, k: kB, cor: APOIO[1].cor, pe: APOIO[1].pe, sombra: APOIO[1].sombra,
-        pulo: puloB + puloFesta * felizApoio, apy: 1 - escora * .06 - (puloB > 4 ? .04 : 0),
-        inclina: -escora * .22, passo: t * .035,
-        correndo: (t > 3180 && t < 3640) || (t > 5480 && t < 6150),
-        feliz: felizApoio, concentrado: escora > .5 && felizApoio < .3,
-        bracos: escora > .3 ? "cima" : "aponta",
-        empurraY: 34, empurraLado: -52, olhar: -3, olharY: -1
-      });
-
-      /* ------- gota de suor no auge do pânico ------- */
-      if (panicoG > .5) {
-        const gp = sat01((t - 3120) / 620);
-        ctx.fillStyle = "#8FD3F4";
-        ctx.globalAlpha = (1 - gp) * panicoG;
+      /* raios até o núcleo */
+      pontos.forEach((p, i) => {
+        ctx.strokeStyle = comAlfa(NOS[i].tom, .06 + p.frente * .10);
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.ellipse(gx + 34 + gp * 26, topoCabeca + 26 - gp * 8 + gp * gp * 46, 3, 4.2, .5, 0, 7);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
+        ctx.moveTo(CX, CY);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      });
 
-      /* ------- partículas ------- */
-      pos.forEach(pt => {
-        if (pt.vida <= 0) return;
-        pt.vida -= dt / pt.dur;
-        if (pt.vida <= 0) return;
-        pt.vx *= .99;
-        pt.vy += (pt.tipo === "poeira" ? 40 : pt.tipo === "brilho" ? 0 : 480) * dt;
-        pt.x += pt.vx * dt; pt.y += pt.vy * dt;
-        ctx.globalAlpha = Math.min(1, pt.vida * 1.3);
-        if (pt.tipo === "poeira") {
-          ctx.fillStyle = C.fraco; ctx.globalAlpha *= .4;
-          ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r * (2 - pt.vida), 0, 7); ctx.fill();
-        } else if (pt.tipo === "brilho") {
-          ctx.strokeStyle = C.acento; ctx.lineWidth = 1.6; ctx.lineCap = "round";
-          const s = pt.r * 2.2 * pt.vida;
+      /* conexões acesas */
+      const brilho = new Array(NOS.length).fill(0);
+      LIGACOES.forEach(([a, b], k) => {
+        // a mesma conexão reaparece no ciclo seguinte: cobre a virada sem corte
+        [0, -DUR_CICLO].forEach(deslocamento => {
+          const inicio = k * PASSO + deslocamento;
+          const u = (t - inicio) / DURA;
+          if (u < 0 || u > 1) return;
+
+          const p0 = pontos[a], p1 = pontos[b];
+          const traco = saiCubica(sat01(u / .42));            // desenha
+          const some = u > .72 ? 1 - (u - .72) / .28 : 1;     // apaga
+          const nitidez = Math.min(p0.frente, p1.frente) * .5 + .5;
+
+          const grad = ctx.createLinearGradient(p0.x, p0.y, p1.x, p1.y);
+          grad.addColorStop(0, comAlfa(NOS[a].tom, .85 * some * nitidez));
+          grad.addColorStop(1, comAlfa(NOS[b].tom, .85 * some * nitidez));
+          ctx.strokeStyle = grad;
+          ctx.lineWidth = 1.5;
+          ctx.lineCap = "round";
           ctx.beginPath();
-          ctx.moveTo(pt.x - s, pt.y); ctx.lineTo(pt.x + s, pt.y);
-          ctx.moveTo(pt.x, pt.y - s); ctx.lineTo(pt.x, pt.y + s);
+          const passos = 40;
+          for (let s = 0; s <= passos * traco; s++) {
+            const q = pontoDaCurva(p0, p1, s / passos);
+            s === 0 ? ctx.moveTo(q.x, q.y) : ctx.lineTo(q.x, q.y);
+          }
           ctx.stroke();
-        } else {
-          ctx.save();
-          ctx.translate(pt.x, pt.y);
-          ctx.rotate(pt.giro + (1 - pt.vida) * 9);
-          ctx.fillStyle = pt.cor;
-          ctx.fillRect(-pt.r, -pt.r * .6, pt.r * 2, pt.r * 1.2);
-          ctx.restore();
+
+          // o pulso que percorre a conexão
+          const pu = sat01((u - .18) / .44);
+          if (pu > 0 && pu < 1) {
+            const q = pontoDaCurva(p0, p1, suave(pu));
+            const halo = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, 9);
+            halo.addColorStop(0, comAlfa(C.acento, .55 * some));
+            halo.addColorStop(1, comAlfa(C.acento, 0));
+            ctx.fillStyle = halo;
+            ctx.beginPath(); ctx.arc(q.x, q.y, 9, 0, 7); ctx.fill();
+            ctx.fillStyle = comAlfa(C.acento, some);
+            ctx.beginPath(); ctx.arc(q.x, q.y, 2.3, 0, 7); ctx.fill();
+          }
+
+          brilho[a] = Math.max(brilho[a], saiCubica(sat01(u / .2)) * some);
+          brilho[b] = Math.max(brilho[b], saiCubica(sat01((u - .5) / .18)) * some);
+
+          // anel de chegada
+          const ru = sat01((u - .6) / .3);
+          if (ru > 0 && ru < 1) {
+            ctx.strokeStyle = comAlfa(NOS[b].tom, (1 - ru) * .7);
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.arc(p1.x, p1.y, 7 + ru * 16, 0, 7);
+            ctx.stroke();
+          }
+        });
+      });
+
+      /* núcleo */
+      const respira = .5 + .5 * Math.sin(t / 1400);
+      const halo = ctx.createRadialGradient(CX, CY, 0, CX, CY, 46);
+      halo.addColorStop(0, comAlfa(C.acento, .12 + respira * .05));
+      halo.addColorStop(1, comAlfa(C.acento, 0));
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(CX, CY, 46, 0, 7); ctx.fill();
+
+      ctx.strokeStyle = comAlfa(C.acento, .22 + respira * .12);
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(CX, CY, 27 + respira * 1.5, 0, 7); ctx.stroke();
+
+      ctx.fillStyle = C.painel;
+      ctx.beginPath(); ctx.arc(CX, CY, 19, 0, 7); ctx.fill();
+      ctx.strokeStyle = comAlfa(C.acento, .55);
+      ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(CX, CY, 19, 0, 7); ctx.stroke();
+
+      ctx.fillStyle = C.txt;
+      ctx.font = '600 8px "IBM Plex Mono", ui-monospace, monospace';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("ADECON", CX, CY - 3);
+      ctx.fillStyle = comAlfa(C.acento, .9);
+      ctx.font = '600 6.5px "IBM Plex Mono", ui-monospace, monospace';
+      ctx.fillText("INOVAÇÃO", CX, CY + 7);
+
+      /* nós — os de trás primeiro, para a profundidade ficar correta */
+      NOS.map((n, i) => ({ n, i, p: pontos[i] }))
+         .sort((a, b) => a.p.frente - b.p.frente)
+         .forEach(({ n, i, p }) => {
+        const f = p.frente, b = brilho[i];
+        const r = 5 + f * 3 + b * 2.5;
+
+        if (b > .02) {
+          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 22);
+          g.addColorStop(0, comAlfa(n.tom, .32 * b));
+          g.addColorStop(1, comAlfa(n.tom, 0));
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.arc(p.x, p.y, 22, 0, 7); ctx.fill();
         }
-        ctx.globalAlpha = 1;
+
+        ctx.fillStyle = comAlfa(n.tom, .42 + f * .45 + b * .13);
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+
+        ctx.fillStyle = C.painel;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r - 2.2, 0, 7); ctx.fill();
+        ctx.fillStyle = comAlfa(n.tom, .6 + f * .4);
+        ctx.beginPath(); ctx.arc(p.x, p.y, r - 3.8, 0, 7); ctx.fill();
+
+        const lx = CX + (RX + 26) * Math.cos(p.a);
+        const ly = CY + (RY + 19) * Math.sin(p.a);
+        ctx.font = `600 ${(7.6 + f * 1.4).toFixed(1)}px "IBM Plex Mono", ui-monospace, monospace`;
+        ctx.fillStyle = comAlfa(b > .3 ? n.tom : C.muted, .35 + f * .45 + b * .2);
+        ctx.fillText(n.sigla, lx, ly);
       });
     }
 
     /* --- dimensionamento e laço ------------------------------------------- */
 
-    let larguraAnterior = 0;
     function ajustar() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cssW = cv.clientWidth || LW;
@@ -2373,13 +2136,11 @@ CI.views = (function () {
       const mudou = cv.width !== alvoW || cv.height !== alvoH;
       if (mudou) { cv.width = alvoW; cv.height = alvoH; }
       ctx.setTransform(alvoW / LW, 0, 0, alvoW / LW, 0, 0);
-      larguraAnterior = alvoW;
       return mudou;
     }
 
-    /* O Windows com "efeitos de animação" desligado faz o navegador pedir menos
-       movimento. Respeitamos: começa parado — mas com um botão bem visível, e a
-       escolha fica guardada neste navegador. */
+    /* Com "reduzir movimento" ligado no sistema, a cena abre parada num quadro
+       com conexões acesas — e o botão fica em destaque para quem quiser ver. */
     const pedeQuieto = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let escolha = null;
     try { escolha = localStorage.getItem("ci:animacao"); } catch (_) {}
@@ -2400,27 +2161,27 @@ CI.views = (function () {
     });
     pintarBotao();
 
-    let tCena = rodando ? 300 : 4450;      // parado, mostra o quadro da comemoração
+    let tCena = 1200;
     let anterior = performance.now();
     let jaApareceu = false;
     let precisaPintar = true;
 
     function quadro(agora) {
       if (cv.isConnected) jaApareceu = true;
-      else if (jaApareceu) return;         // saiu da tela: encerra o laço
-      const dt = Math.min((agora - anterior) / 1000, .05);
+      else if (jaApareceu) return;
+      const dt = Math.min(agora - anterior, 50);
       anterior = agora;
       const redimensionou = ajustar();
-      if (rodando) { tCena = (tCena + dt * 1000) % DUR_CICLO; precisaPintar = true; }
+      if (rodando) { tCena = (tCena + dt) % DUR_CICLO; precisaPintar = true; }
       if (precisaPintar || redimensionou) {
-        desenharCena(tCena, rodando ? dt : 0);
+        desenharCena(tCena);
         precisaPintar = rodando;
       }
       requestAnimationFrame(quadro);
     }
     requestAnimationFrame(quadro);
 
-    cv.__cena = desenharCena;        // usado só para inspecionar quadros isolados
+    cv.__cena = desenharCena;
     return h("div", { estilo: { position: "relative" } }, cv, botao);
   }
 
@@ -2445,8 +2206,8 @@ CI.views = (function () {
         h("div.palco",
           palcoAnimado(),
           h("div.palco-rodape",
-            h("span.rotulo", "cinco projetos, três pessoas, nenhuma caixa no chão"),
-            h("span.rotulo", { estilo: { color: "var(--accent)" } }, "equilíbrio: instável"))
+            h("span.rotulo", "oito diretorias · uma carteira"),
+            h("span.rotulo", { estilo: { color: "var(--accent)" } }, "conexões ativas"))
         ),
 
         h("div.inicio-acoes",
