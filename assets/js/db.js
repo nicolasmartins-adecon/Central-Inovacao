@@ -147,23 +147,32 @@ CI.db = (function () {
     if (api.estado === "local") api.mensagemEstado = "Modo local";
     const salvo = cofre.ler(CHAVE_DADOS, null);
     api.dados = salvo && salvo.projetos ? Object.assign(vazio(), salvo) : Object.assign(vazio(), copiaSeed());
-    migrarCores();
+    migrarDados();
     persistirLocal();
     api.emitir();
   };
 
-  /* As cores das diretorias são identidade visual, não dado do usuário:
-     quando mudam no seed, atualizamos o que já estiver gravado no navegador. */
-  const VERSAO_CORES = 2;
-  function migrarCores() {
-    if (api.dados.__versaoCores === VERSAO_CORES) return;
-    const doSeed = new Map((copiaSeed().diretorias || []).map(d => [d.id, d.cor]));
-    (api.dados.diretorias || []).forEach(d => {
-      if (doSeed.has(d.id)) d.cor = doSeed.get(d.id);
-    });
-    // projetos passam a herdar a cor da diretoria
+  /* Cores e estrutura são definição do sistema, não dado do usuário: quando
+     mudam no seed, atualizamos o que já estiver gravado neste navegador. */
+  const VERSAO_DADOS = 3;
+  function migrarDados() {
+    if (api.dados.__versaoCores === VERSAO_DADOS) return;
+    const seed = copiaSeed();
+
+    // v2 — cores de marca das diretorias
+    const cores = new Map((seed.diretorias || []).map(d => [d.id, d.cor]));
+    (api.dados.diretorias || []).forEach(d => { if (cores.has(d.id)) d.cor = cores.get(d.id); });
     (api.dados.projetos || []).forEach(p => { p.cor = ""; });
-    api.dados.__versaoCores = VERSAO_CORES;
+
+    // v3 — ações que pertencem a mais de uma diretoria
+    ["projetos", "implementacoes"].forEach(tabela => {
+      const apoio = new Map((seed[tabela] || []).map(r => [r.id, r.diretorias_apoio || []]));
+      (api.dados[tabela] || []).forEach(r => {
+        if (!Array.isArray(r.diretorias_apoio)) r.diretorias_apoio = apoio.get(r.id) || [];
+      });
+    });
+
+    api.dados.__versaoCores = VERSAO_DADOS;
   }
 
   function persistirLocal() {
@@ -172,7 +181,7 @@ CI.db = (function () {
 
   api.restaurarExemplo = function () {
     api.dados = Object.assign(vazio(), copiaSeed());
-    api.dados.__versaoCores = VERSAO_CORES;
+    api.dados.__versaoCores = VERSAO_DADOS;
     persistirLocal();
     api.emitir();
   };
