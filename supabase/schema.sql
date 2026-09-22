@@ -76,6 +76,12 @@ create table if not exists public.diretorias (
   criado_em             timestamptz not null default now()
 );
 
+-- Presidência e Diretorias em Conexão funcionam como diretorias em tudo, mas
+-- não entram na CONTAGEM de "quantas diretorias temos". Este campo decide isso,
+-- para a regra ficar no dado e não no código.
+alter table public.diretorias
+  add column if not exists conta_no_total boolean not null default true;
+
 alter table public.perfis
   drop constraint if exists perfis_diretoria_fk;
 alter table public.perfis
@@ -211,7 +217,27 @@ create table if not exists public.avaliacoes (
   criado_em     timestamptz not null default now()
 );
 
--- 2.9 Fila de notificações por e-mail (consumida pela Edge Function) ----------
+-- 2.9 Inscrições de aviso ----------------------------------------------------
+-- Cada membro cadastra o próprio e-mail e escolhe o que quer acompanhar.
+-- projeto_id nulo = quer ser avisado de todos os projetos internos.
+create table if not exists public.inscricoes (
+  id          uuid primary key default gen_random_uuid(),
+  nome        text not null default '',
+  email       text not null,
+  projeto_id  uuid references public.projetos(id) on delete cascade,
+  ativo       boolean not null default true,
+  criado_em   timestamptz not null default now()
+);
+
+-- Um e-mail por projeto, e no máximo uma inscrição "todos" por e-mail.
+-- (Índices parciais porque, em UNIQUE comum, dois NULL não colidem.)
+create unique index if not exists uq_inscricao_projeto
+  on public.inscricoes (lower(email), projeto_id) where projeto_id is not null;
+create unique index if not exists uq_inscricao_geral
+  on public.inscricoes (lower(email)) where projeto_id is null;
+create index if not exists idx_inscricoes_projeto on public.inscricoes(projeto_id) where ativo;
+
+-- 2.10 Fila de notificações por e-mail (consumida pela Edge Function) ----------
 create table if not exists public.notificacoes (
   id           uuid primary key default gen_random_uuid(),
   tipo         text not null,               -- etapa_atribuida | comentario_novo | prazo_proximo | prazo_vencido | etapa_concluida
@@ -229,11 +255,15 @@ create index if not exists idx_notificacoes_pendentes
   on public.notificacoes(criado_em) where status = 'pendente';
 
 -- Evita reenviar o mesmo lembrete de prazo no mesmo dia
+-- Um aviso por destinatário, por alvo, por dia: rodar a função duas vezes não
+-- duplica e-mail.
 create unique index if not exists uq_notificacoes_prazo_dia
   on public.notificacoes (
-    tipo, para_email, (dados->>'etapa_id'), ((criado_em at time zone 'UTC')::date)
+    tipo, para_email,
+    (coalesce(dados->>'etapa_id', dados->>'projeto_id', '')),
+    ((criado_em at time zone 'UTC')::date)
   )
-  where tipo in ('prazo_proximo','prazo_vencido');
+  where tipo in ('prazo_proximo','prazo_vencido','prazo_projeto');
 
 -- =============================================================================
 -- 3. VIEWS
@@ -462,6 +492,7 @@ alter table public.comentarios      enable row level security;
 alter table public.itens_diretoria  enable row level security;
 alter table public.implementacoes   enable row level security;
 alter table public.avaliacoes       enable row level security;
+alter table public.inscricoes       enable row level security;
 alter table public.notificacoes     enable row level security;
 
 -- perfis ----------------------------------------------------------------------
@@ -479,7 +510,7 @@ declare t text;
 begin
   foreach t in array array[
     'diretorias','projetos','etapas','comentarios',
-    'itens_diretoria','implementacoes','avaliacoes'
+    'itens_diretoria','implementacoes','avaliacoes','inscricoes'
   ] loop
     execute format('drop policy if exists %I on public.%I', t || '_leitura', t);
     execute format(
@@ -494,7 +525,8 @@ do $$
 declare t text;
 begin
   foreach t in array array[
-    'projetos','etapas','comentarios','itens_diretoria','implementacoes','avaliacoes'
+    'projetos','etapas','comentarios','itens_diretoria','implementacoes',
+    'avaliacoes','inscricoes'
   ] loop
     execute format('drop policy if exists %I on public.%I', t || '_insercao', t);
     execute format(
@@ -524,6 +556,10 @@ create policy implementacoes_exclusao on public.implementacoes
 
 drop policy if exists avaliacoes_exclusao on public.avaliacoes;
 create policy avaliacoes_exclusao on public.avaliacoes
+  for delete to authenticated using (true);
+
+drop policy if exists inscricoes_exclusao on public.inscricoes;
+create policy inscricoes_exclusao on public.inscricoes
   for delete to authenticated using (true);
 
 -- o autor apaga o próprio comentário; gestor apaga qualquer um
@@ -567,6 +603,10 @@ do $$
 begin
   alter publication supabase_realtime add table public.implementacoes;
 exception when duplicate_object then null; end $$;
+do $$
+begin
+  alter publication supabase_realtime add table public.inscricoes;
+exception when duplicate_object then null; end $$;
 
 -- =============================================================================
 -- 7. AGENDAMENTOS (opcional — requer pg_cron + pg_net habilitados)
@@ -590,9 +630,11 @@ exception when duplicate_object then null; end $$;
 --   $cron$
 -- );
 --
+-- O Brasil não tem mais horário de verão, então Brasília é UTC-3 o ano todo:
+-- 13h30 daqui = 16h30 UTC, todos os dias.
 -- select cron.schedule(
 --   'lembretes-de-prazo',
---   '0 11 * * 1-5',                    -- 08h00 de Brasília em dias úteis (11h UTC)
+--   '30 16 * * *',                     -- 13h30 de Brasília
 --   $cron$
 --   select net.http_post(
 --     url     := 'https://SEU-PROJETO.supabase.co/functions/v1/lembretes-prazos',
@@ -635,6 +677,9 @@ on conflict (nome) do update set
   cor = excluded.cor,
   sigla = excluded.sigla,
   ordem = excluded.ordem;
+
+update public.diretorias set conta_no_total = false
+  where nome in ('Presidência', 'Diretorias em Conexão');
 
 -- =============================================================================
 -- Fim. Próximo passo: publicar as Edge Functions (pasta supabase/functions).
