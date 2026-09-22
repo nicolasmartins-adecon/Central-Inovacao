@@ -53,6 +53,10 @@ CI.views = (function () {
     return db.diretoria(id)?.nome || "Sem diretoria";
   }
 
+  /* Presidência e Diretorias em Conexão aparecem e funcionam como qualquer
+     outra diretoria; só não entram quando o número é o assunto. */
+  const diretoriasContaveis = () => db.dados.diretorias.filter(d => d.conta_no_total !== false);
+
   /* ---- ações compartilhadas ---------------------------------------------
      Uma ação é UMA linha no banco. `diretoria_id` é a diretoria responsável e
      `diretorias_apoio` guarda as demais envolvidas. Ela aparece no quadro de
@@ -69,6 +73,44 @@ CI.views = (function () {
   }
 
   const participa = (reg, dirId) => diretoriasDe(reg).includes(dirId);
+
+  /* ---- avisos por e-mail ------------------------------------------------
+     Cada pessoa cadastra o próprio e-mail e escolhe o que acompanhar.
+     projeto_id nulo = quer saber de todos os projetos internos.
+     ---------------------------------------------------------------------- */
+
+  const normEmail = e => String(e || "").trim().toLowerCase();
+
+  const inscricoesDe = email => db.dados.inscricoes
+    .filter(i => normEmail(i.email) === normEmail(email));
+
+  const seguidoresDe = projetoId => db.dados.inscricoes
+    .filter(i => i.ativo !== false && (i.projeto_id === projetoId || !i.projeto_id));
+
+  function segueProjeto(email, projetoId) {
+    if (!normEmail(email)) return false;
+    return inscricoesDe(email).some(i => !i.projeto_id || i.projeto_id === projetoId);
+  }
+
+  /** Acerta as inscrições de um e-mail para exatamente a seleção pedida. */
+  async function salvarInscricoes(email, nome, todos, ids) {
+    const e = normEmail(email);
+    const atuais = inscricoesDe(e);
+    const desejadas = todos ? [null] : (ids || []).slice();
+
+    for (const i of atuais) {
+      const alvo = i.projeto_id || null;
+      if (!desejadas.some(d => (d || null) === alvo)) await db.excluir("inscricoes", i.id);
+    }
+    for (const d of desejadas) {
+      const ja = atuais.find(i => (i.projeto_id || null) === (d || null));
+      if (ja) {
+        if ((ja.nome || "") !== nome) await db.atualizar("inscricoes", ja.id, { nome });
+      } else {
+        await db.criar("inscricoes", { email: e, nome, projeto_id: d, ativo: true });
+      }
+    }
+  }
   const compartilhada = reg => diretoriasDe(reg).length > 1;
 
   /** Siglas das outras diretorias envolvidas, para marcar o que é conjunto. */
@@ -701,7 +743,8 @@ CI.views = (function () {
           s.atrasadas ? chip(`${s.atrasadas} fora do prazo`, "crit") : null
         )
       ),
-      h("div", { estilo: { display: "flex", gap: "7px", alignItems: "center" } },
+      h("div", { estilo: { display: "flex", gap: "7px", alignItems: "center", flexWrap: "wrap" } },
+        botaoSeguir(p),
         h("button.btn", { type: "button", onclick: () => modalProjeto(p) }, ic("lapis"), "Editar"),
         h("button.btn.btn-primario", { type: "button", onclick: () => modalEtapa(p.id) }, ic("mais"), "Nova etapa")
       )
@@ -790,6 +833,49 @@ CI.views = (function () {
     );
 
     return h("div.view", cabecalho, h("div.console", vitais, trilha));
+  }
+
+  /** Um clique para receber (ou parar de receber) os avisos deste projeto. */
+  function botaoSeguir(p) {
+    const meu = normEmail(db.perfil.email);
+    const segue = segueProjeto(meu, p.id);
+    const geral = meu && inscricoesDe(meu).some(i => !i.projeto_id);
+    const quantos = seguidoresDe(p.id).length;
+
+    return h("button.btn" + (segue ? "" : ""), {
+      type: "button",
+      title: geral
+        ? "Você acompanha todos os projetos internos. Ajuste em Conexão → Avisos por e-mail."
+        : segue ? "Parar de receber avisos deste projeto" : "Receber avisos de prazo deste projeto",
+      estilo: segue ? { borderColor: "var(--accent-line)", color: "var(--accent)" } : {},
+      onclick: async () => {
+        if (!meu) {
+          U.aviso("Cadastre seu e-mail em Conexão → Avisos por e-mail.", "alerta");
+          location.hash = "#/config";
+          return;
+        }
+        if (geral) {
+          U.aviso("Você acompanha todos os projetos internos. Ajuste em Conexão.", "info");
+          location.hash = "#/config";
+          return;
+        }
+        try {
+          if (segue) {
+            for (const i of inscricoesDe(meu).filter(x => x.projeto_id === p.id)) {
+              await db.excluir("inscricoes", i.id);
+            }
+            U.aviso("Você não recebe mais avisos deste projeto", "ok");
+          } else {
+            await db.criar("inscricoes", {
+              email: meu, nome: db.perfil.nome || "", projeto_id: p.id, ativo: true
+            });
+            U.aviso("Pronto: avisos 7, 3 e 1 dia antes, às 13h30", "ok");
+          }
+          CI.app.recarregarVista();
+        } catch (err) { U.aviso(err.message, "erro"); }
+      }
+    }, ic("correio"), segue ? "Recebendo avisos" : "Receber avisos",
+       quantos ? h("span.dado", { estilo: { fontSize: "11px", color: "var(--muted)" } }, String(quantos)) : null);
   }
 
   function vital(rotulo, valor) {
@@ -1680,6 +1766,139 @@ CI.views = (function () {
      CONFIGURAÇÃO
      ====================================================================== */
 
+  function painelAvisos() {
+    const internos = db.dados.projetos.filter(p => p.tipo === "Projeto Interno");
+    const fNome = entrada({ value: db.perfil.nome || "", placeholder: "Seu nome" });
+    const fEmail = entrada({ type: "email", value: db.perfil.email || "", placeholder: "voce@adecon.com.br" });
+
+    let minhas = inscricoesDe(fEmail.value);
+    let todos = minhas.some(i => !i.projeto_id);
+    let escolhidos = new Set(minhas.filter(i => i.projeto_id).map(i => i.projeto_id));
+
+    /* Os botões são criados uma vez e só mudam de estado. Recriá-los a cada
+       alteração fazia o navegador descartar o clique seguinte, porque o nó
+       sumia entre o apertar e o soltar do mouse. */
+    const alternarTodos = h("button.dir-toggle", {
+      type: "button", estilo: { "--tom": "var(--accent)" },
+      onclick: () => { todos = !todos; atualizar(); }
+    }, h("i.ponto-dir", { estilo: { background: "var(--accent)" } }), "Todos os projetos internos");
+
+    const botoes = internos.map(p => {
+      const cor = corProjeto(p);
+      return {
+        p,
+        el: h("button.dir-toggle", {
+          type: "button", title: p.nome, estilo: { "--tom": cor },
+          onclick: () => {
+            escolhidos.has(p.id) ? escolhidos.delete(p.id) : escolhidos.add(p.id);
+            atualizar();
+          }
+        }, h("i.ponto-dir", { estilo: { background: cor } }), p.nome)
+      };
+    });
+    const lista = h("div.multi-dir", ...botoes.map(b => b.el));
+
+    function atualizar() {
+      alternarTodos.classList.toggle("ativa", todos);
+      botoes.forEach(({ p, el }) => {
+        el.classList.toggle("ativa", todos || escolhidos.has(p.id));
+        el.disabled = todos;
+      });
+    }
+
+    let emailCarregado = normEmail(fEmail.value);
+    fEmail.addEventListener("change", () => {
+      const e = normEmail(fEmail.value);
+      if (e === emailCarregado) return;
+      emailCarregado = e;
+      minhas = inscricoesDe(e);
+      todos = minhas.some(i => !i.projeto_id);
+      escolhidos = new Set(minhas.filter(i => i.projeto_id).map(i => i.projeto_id));
+      atualizar();
+    });
+    atualizar();
+
+    const inscritos = db.dados.inscricoes.slice()
+      .sort((a, b) => normEmail(a.email).localeCompare(normEmail(b.email)));
+
+    return h("section.painel",
+      h("div.painel-hd",
+        h("h2", "Avisos por e-mail"),
+        h("div.acoes", chip(`${new Set(db.dados.inscricoes.map(i => normEmail(i.email))).size} inscritos`))),
+      h("div.painel-bd", { estilo: { display: "grid", gap: "14px" } },
+        h("p.discreto", { estilo: { fontSize: "12.5px", lineHeight: 1.6 } },
+          "Cadastre seu e-mail para ser avisado quando o prazo estiver chegando. ",
+          "Os avisos saem ", h("strong", { estilo: { color: "var(--txt-2)" } }, "7 dias, 3 dias e 1 dia antes"),
+          ", sempre às ", h("strong", { estilo: { color: "var(--txt-2)" } }, "13h30"),
+          ", tanto para as etapas quanto para o término do projeto."),
+
+        h("div.linha-campos", campo("Nome", fNome), campo("E-mail", fEmail)),
+        campo("O que você quer acompanhar", h("div", { estilo: { display: "grid", gap: "8px" } },
+          h("div.multi-dir", alternarTodos), lista),
+          "Marque \u201ctodos\u201d para receber de qualquer projeto interno, inclusive os criados depois — " +
+          "ou escolha um a um."),
+
+        h("div", { estilo: { display: "flex", gap: "8px", flexWrap: "wrap" } },
+          h("button.btn.btn-primario", {
+            type: "button",
+            onclick: async () => {
+              const email = normEmail(fEmail.value);
+              if (!email.includes("@")) { U.aviso("Informe um e-mail válido.", "alerta"); fEmail.focus(); return; }
+              if (!todos && !escolhidos.size) { U.aviso("Escolha ao menos um projeto — ou marque todos.", "alerta"); return; }
+              try {
+                await salvarInscricoes(email, fNome.value.trim(), todos, [...escolhidos]);
+                db.salvarPerfil({ nome: fNome.value.trim(), email });
+                U.aviso("Avisos configurados para " + email, "ok");
+                CI.app.recarregarVista();
+              } catch (err) { U.aviso("Não salvou: " + err.message, "erro"); }
+            }
+          }, ic("correio"), "Salvar meus avisos"),
+          minhas.length ? h("button.btn.btn-perigo", {
+            type: "button",
+            onclick: async () => {
+              const ok = await U.confirmar("Cancelar avisos",
+                `${normEmail(fEmail.value)} deixa de receber qualquer aviso de prazo.`, "Cancelar avisos");
+              if (!ok) return;
+              for (const i of inscricoesDe(fEmail.value)) await db.excluir("inscricoes", i.id);
+              U.aviso("Inscrições removidas", "ok");
+              CI.app.recarregarVista();
+            }
+          }, ic("x"), "Cancelar meus avisos") : null
+        ),
+
+        db.motor === "local"
+          ? h("p", { estilo: { fontSize: "12px", color: "var(--warn)", lineHeight: 1.55 } },
+              "Em modo local a inscrição fica só neste navegador e nenhum e-mail é enviado. ",
+              "Conecte o Supabase e publique as Edge Functions para os avisos saírem de verdade.")
+          : null,
+
+        inscritos.length
+          ? h("div",
+              h("span.rotulo", { estilo: { display: "block", marginBottom: "9px" } }, "quem já está inscrito"),
+              h("div.tabela-rolagem", h("table.tabela", { estilo: { minWidth: "420px" } },
+                h("thead", h("tr", h("th", "Pessoa"), h("th", "Acompanha"), h("th", ""))),
+                h("tbody", ...inscritos.map(i => h("tr",
+                  h("td",
+                    h("div", { estilo: { fontWeight: 500 } }, i.nome || "—"),
+                    h("div.dado", { estilo: { fontSize: "11px", color: "var(--muted)" } }, i.email)),
+                  h("td", i.projeto_id
+                    ? (db.projeto(i.projeto_id)?.nome || "projeto removido")
+                    : chip("Todos os projetos internos", "acc")),
+                  h("td", { estilo: { textAlign: "right" } },
+                    h("button.btn.btn-fantasma.btn-icone.btn-p", {
+                      type: "button", "aria-label": "Remover inscrição",
+                      onclick: async () => {
+                        try { await db.excluir("inscricoes", i.id); CI.app.recarregarVista(); }
+                        catch (err) { U.aviso(err.message, "erro"); }
+                      }
+                    }, ic("lixeira")))
+                )))
+              )))
+          : null
+      )
+    );
+  }
+
   function vConfig() {
     const con = db.conexao();
     const fUrl = entrada({ value: con.url, placeholder: "https://xxxxxxxx.supabase.co" });
@@ -1792,10 +2011,13 @@ CI.views = (function () {
       )
     );
 
-    return h("div.view", h("div.grade.g-2.surge",
-      h("div", { estilo: { display: "flex", flexDirection: "column", gap: "14px" } }, painelConexao, painelDados),
-      h("div", { estilo: { display: "flex", flexDirection: "column", gap: "14px" } }, painelPerfil, painelEmail)
-    ));
+    return h("div.view",
+      h("div.grade.g-2.surge",
+        h("div", { estilo: { display: "flex", flexDirection: "column", gap: "14px" } }, painelConexao, painelDados),
+        h("div", { estilo: { display: "flex", flexDirection: "column", gap: "14px" } }, painelPerfil, painelEmail)
+      ),
+      h("div.surge", { estilo: { marginTop: "14px" } }, painelAvisos())
+    );
   }
 
   /* =========================================================================
@@ -2206,7 +2428,7 @@ CI.views = (function () {
         h("div.palco",
           palcoAnimado(),
           h("div.palco-rodape",
-            h("span.rotulo", "oito diretorias · uma carteira"),
+            h("span.rotulo", "as diretorias, a presidência e as conexões"),
             h("span.rotulo", { estilo: { color: "var(--accent)" } }, "conexões ativas"))
         ),
 
@@ -2224,7 +2446,7 @@ CI.views = (function () {
 
         h("div.inicio-nums",
           numero(internos.length, "projetos internos"),
-          numero(db.dados.diretorias.length, "diretorias"),
+          numero(diretoriasContaveis().length, "diretorias"),
           numero(etapas.length, "etapas mapeadas"),
           numero(etapas.length ? Math.round((feitas / etapas.length) * 100) + "%" : "0%", "já concluído")
         )
