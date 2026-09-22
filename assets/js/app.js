@@ -141,7 +141,7 @@ CI.app = (function () {
     let grupo = null;
     const contagens = {
       projetos: db.dados.projetos.length,
-      diretorias: db.dados.diretorias.length,
+      diretorias: db.dados.diretorias.filter(d => d.conta_no_total !== false).length,
       implementacao: db.dados.implementacoes.length
     };
     ROTAS.forEach(r => {
