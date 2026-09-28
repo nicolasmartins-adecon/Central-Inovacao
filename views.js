@@ -57,6 +57,14 @@ CI.views = (function () {
      outra diretoria; só não entram quando o número é o assunto. */
   const diretoriasContaveis = () => db.dados.diretorias.filter(d => d.conta_no_total !== false);
 
+  /* "das seis diretorias" — o texto acompanha o cadastro, sem número na mão. */
+  const EXTENSO = ["nenhuma", "uma", "duas", "três", "quatro", "cinco", "seis",
+                   "sete", "oito", "nove", "dez", "onze", "doze"];
+  function fraseDiretorias(n) {
+    if (n === 1) return "da diretoria";
+    return `das ${EXTENSO[n] || n} diretorias`;
+  }
+
   /* ---- ações compartilhadas ---------------------------------------------
      Uma ação é UMA linha no banco. `diretoria_id` é a diretoria responsável e
      `diretorias_apoio` guarda as demais envolvidas. Ela aparece no quadro de
@@ -474,11 +482,22 @@ CI.views = (function () {
       ));
 
       const faixa = h("div.crono-faixa");
-      const ci = colunaDe(p.inicio || p.termino, anoCrono);
-      const cf = colunaDe(p.termino || p.inicio, anoCrono);
 
-      const noAno = (p.inicio && U.paraData(p.inicio)?.getFullYear() <= anoCrono) &&
-                    (p.termino ? U.paraData(p.termino)?.getFullYear() >= anoCrono : true);
+      /* A barra é o pedaço do projeto que cai DENTRO do ciclo mostrado.
+         Com só uma das duas datas preenchidas ela vira uma barra de uma
+         semana — antes o projeto simplesmente sumia da grade e sobrava uma
+         linha vazia, sem explicação. `colunaDe` já apara o que passa do ano,
+         então um projeto que atravessa dezembro aparece nos dois ciclos. */
+      const dataA = p.inicio || p.termino;
+      const dataB = p.termino || p.inicio;
+      const dA = U.paraData(dataA), dB = U.paraData(dataB);
+      const [de, ate] = (dA && dB && dA > dB) ? [dataB, dataA] : [dataA, dataB];
+      const dDe = U.paraData(de), dAte = U.paraData(ate);
+
+      const ci = colunaDe(de, anoCrono);
+      const cf = colunaDe(ate, anoCrono);
+      const noAno = dDe && dAte &&
+                    dDe.getFullYear() <= anoCrono && dAte.getFullYear() >= anoCrono;
 
       if (ci !== null && cf !== null && noAno) {
         const ini = Math.min(ci, cf), fim = Math.max(ci, cf);
@@ -498,6 +517,15 @@ CI.views = (function () {
         );
         ligarArrasto(barra, p);
         faixa.appendChild(barra);
+      } else if (dDe) {
+        /* Tem data, mas em outro ciclo. Em vez de uma faixa vazia, um atalho
+           que diz onde o projeto está e leva até lá. */
+        const alvo = (dAte && dAte.getFullYear() < anoCrono ? dAte : dDe).getFullYear();
+        faixa.appendChild(h("button.crono-fora", {
+          type: "button",
+          title: `${p.nome} está no ciclo ${alvo}. Clique para ir até lá.`,
+          onclick: () => { anoCrono = alvo; CI.app.recarregarVista(); }
+        }, alvo < anoCrono ? `◂ ciclo ${alvo}` : `ciclo ${alvo} ▸`));
       }
 
       linha.appendChild(faixa);
@@ -2126,7 +2154,8 @@ CI.views = (function () {
 
   /* =========================================================================
      PÁGINA INICIAL — a rede das diretorias
-     As oito diretorias giram devagar num anel visto de perfil, ligadas a um
+     As oito áreas (diretorias, presidência e conexões) giram devagar num anel
+     visto de perfil, ligadas a um
      núcleo central. A cada 2,5 s uma conexão se acende entre duas delas e um
      pulso percorre o traçado: é uma ação conjunta nascendo. Volta completa em
      20 s, tudo calculado a partir do tempo — o laço fecha sem emenda.
@@ -2147,15 +2176,12 @@ CI.views = (function () {
   }
 
   function palcoAnimado() {
-    const LW = 560, LH = 262;
-    const CX = 280, CY = 134, RX = 186, RY = 72;
-
     const cv = h("canvas", {
       role: "img",
-      "aria-label": "Animação: as oito diretorias da Adecon dispostas em um anel que gira " +
-                    "devagar, ligadas a um núcleo central. Conexões se acendem entre elas, " +
-                    "representando as ações tocadas em conjunto.",
-      estilo: { display: "block", width: "100%", height: "auto", aspectRatio: "560 / 262" }
+      "aria-label": "Animação: as diretorias da Adecon, a presidência e as conexões dispostas " +
+                    "em um anel que gira devagar, ligadas a um núcleo central. Conexões se " +
+                    "acendem entre elas, representando as ações tocadas em conjunto.",
+      estilo: { display: "block", width: "100%" }
     });
     const ctx = cv.getContext("2d");
 
@@ -2190,11 +2216,29 @@ CI.views = (function () {
     const PASSO = DUR_CICLO / LIGACOES.length;
     const DURA = 1750;      // quanto tempo cada conexão fica visível
 
+    /* Geometria em pixels de CSS: o anel cresce com o espaço disponível, mas
+       traços e letras continuam no tamanho certo — o palco fica maior de
+       verdade, em vez de virar um zoom do desenho pequeno. */
+    let G = { w: 720, h: 320, cx: 360, cy: 160, rx: 286, ry: 104, k: 1 };
+
+    function medir() {
+      const w = Math.max(320, Math.round(cv.clientWidth || 720));
+      const alt = Math.round(Math.max(290, Math.min(560, w * 0.44)));
+      const estreito = w < 620;
+      return {
+        w, h: alt,
+        cx: w / 2, cy: alt / 2,
+        rx: Math.max(96, w / 2 - (estreito ? 46 : 78)),
+        ry: Math.max(54, alt / 2 - (estreito ? 40 : 58)),
+        k: Math.min(1.5, Math.max(0.9, w / 820))
+      };
+    }
+
     const posicao = (i, giro) => {
       const a = -Math.PI / 2 + (i / NOS.length) * Math.PI * 2 + giro;
       return {
-        x: CX + RX * Math.cos(a),
-        y: CY + RY * Math.sin(a),
+        x: G.cx + G.rx * Math.cos(a),
+        y: G.cy + G.ry * Math.sin(a),
         // quem está na frente do anel aparece maior e mais nítido
         frente: (Math.sin(a) + 1) / 2,
         a
@@ -2204,7 +2248,7 @@ CI.views = (function () {
     /** Curva que passa por dentro do anel, entre dois nós. */
     function pontoDaCurva(p0, p1, u) {
       const mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
-      const cx = mx + (CX - mx) * .62, cy = my + (CY - my) * .62;
+      const cx = mx + (G.cx - mx) * .62, cy = my + (G.cy - my) * .62;
       const v = 1 - u;
       return {
         x: v * v * p0.x + 2 * v * u * cx + u * u * p1.x,
@@ -2213,12 +2257,13 @@ CI.views = (function () {
     }
 
     function desenharCena(t) {
+      const { w: LW, h: LH, cx: CX, cy: CY, rx: RX, ry: RY, k } = G;
       ctx.clearRect(0, 0, LW, LH);
       const giro = (t / DUR_CICLO) * Math.PI * 2;
       const pontos = NOS.map((_, i) => posicao(i, giro));
 
       /* trilho do anel */
-      ctx.strokeStyle = C.suave;
+      ctx.strokeStyle = C.linha;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.ellipse(CX, CY, RX, RY, 0, 0, Math.PI * 2);
@@ -2226,7 +2271,7 @@ CI.views = (function () {
 
       /* raios até o núcleo */
       pontos.forEach((p, i) => {
-        ctx.strokeStyle = comAlfa(NOS[i].tom, .06 + p.frente * .10);
+        ctx.strokeStyle = comAlfa(NOS[i].tom, .08 + p.frente * .13);
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(CX, CY);
@@ -2252,7 +2297,7 @@ CI.views = (function () {
           grad.addColorStop(0, comAlfa(NOS[a].tom, .85 * some * nitidez));
           grad.addColorStop(1, comAlfa(NOS[b].tom, .85 * some * nitidez));
           ctx.strokeStyle = grad;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = 1.5 * k;
           ctx.lineCap = "round";
           ctx.beginPath();
           const passos = 40;
@@ -2266,13 +2311,14 @@ CI.views = (function () {
           const pu = sat01((u - .18) / .44);
           if (pu > 0 && pu < 1) {
             const q = pontoDaCurva(p0, p1, suave(pu));
-            const halo = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, 9);
+            const raioHalo = 9 * k;
+            const halo = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, raioHalo);
             halo.addColorStop(0, comAlfa(C.acento, .55 * some));
             halo.addColorStop(1, comAlfa(C.acento, 0));
             ctx.fillStyle = halo;
-            ctx.beginPath(); ctx.arc(q.x, q.y, 9, 0, 7); ctx.fill();
+            ctx.beginPath(); ctx.arc(q.x, q.y, raioHalo, 0, 7); ctx.fill();
             ctx.fillStyle = comAlfa(C.acento, some);
-            ctx.beginPath(); ctx.arc(q.x, q.y, 2.3, 0, 7); ctx.fill();
+            ctx.beginPath(); ctx.arc(q.x, q.y, 2.3 * k, 0, 7); ctx.fill();
           }
 
           brilho[a] = Math.max(brilho[a], saiCubica(sat01(u / .2)) * some);
@@ -2282,67 +2328,70 @@ CI.views = (function () {
           const ru = sat01((u - .6) / .3);
           if (ru > 0 && ru < 1) {
             ctx.strokeStyle = comAlfa(NOS[b].tom, (1 - ru) * .7);
-            ctx.lineWidth = 1.4;
+            ctx.lineWidth = 1.4 * k;
             ctx.beginPath();
-            ctx.arc(p1.x, p1.y, 7 + ru * 16, 0, 7);
+            ctx.arc(p1.x, p1.y, (7 + ru * 16) * k, 0, 7);
             ctx.stroke();
           }
         });
       });
 
       /* núcleo */
-      const respira = .5 + .5 * Math.sin(t / 1400);
-      const halo = ctx.createRadialGradient(CX, CY, 0, CX, CY, 46);
+      // o período precisa dividir DUR_CICLO, senão a volta completa não fecha
+      const respira = .5 + .5 * Math.sin((2 * Math.PI * t) / (DUR_CICLO / 2));
+      const rNucleo = 46 * k;
+      const halo = ctx.createRadialGradient(CX, CY, 0, CX, CY, rNucleo);
       halo.addColorStop(0, comAlfa(C.acento, .12 + respira * .05));
       halo.addColorStop(1, comAlfa(C.acento, 0));
       ctx.fillStyle = halo;
-      ctx.beginPath(); ctx.arc(CX, CY, 46, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(CX, CY, rNucleo, 0, 7); ctx.fill();
 
       ctx.strokeStyle = comAlfa(C.acento, .22 + respira * .12);
       ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(CX, CY, 27 + respira * 1.5, 0, 7); ctx.stroke();
+      ctx.beginPath(); ctx.arc(CX, CY, (27 + respira * 1.5) * k, 0, 7); ctx.stroke();
 
       ctx.fillStyle = C.painel;
-      ctx.beginPath(); ctx.arc(CX, CY, 19, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(CX, CY, 19 * k, 0, 7); ctx.fill();
       ctx.strokeStyle = comAlfa(C.acento, .55);
-      ctx.lineWidth = 1.4;
-      ctx.beginPath(); ctx.arc(CX, CY, 19, 0, 7); ctx.stroke();
+      ctx.lineWidth = 1.4 * k;
+      ctx.beginPath(); ctx.arc(CX, CY, 19 * k, 0, 7); ctx.stroke();
 
       ctx.fillStyle = C.txt;
-      ctx.font = '600 8px "IBM Plex Mono", ui-monospace, monospace';
+      ctx.font = `600 ${(8 * k).toFixed(1)}px "IBM Plex Mono", ui-monospace, monospace`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("ADECON", CX, CY - 3);
+      ctx.fillText("ADECON", CX, CY - 3 * k);
       ctx.fillStyle = comAlfa(C.acento, .9);
-      ctx.font = '600 6.5px "IBM Plex Mono", ui-monospace, monospace';
-      ctx.fillText("INOVAÇÃO", CX, CY + 7);
+      ctx.font = `600 ${(6.5 * k).toFixed(1)}px "IBM Plex Mono", ui-monospace, monospace`;
+      ctx.fillText("INOVAÇÃO", CX, CY + 7 * k);
 
       /* nós — os de trás primeiro, para a profundidade ficar correta */
       NOS.map((n, i) => ({ n, i, p: pontos[i] }))
          .sort((a, b) => a.p.frente - b.p.frente)
          .forEach(({ n, i, p }) => {
         const f = p.frente, b = brilho[i];
-        const r = 5 + f * 3 + b * 2.5;
+        const r = (6.6 + f * 3.6 + b * 3) * k;
 
         if (b > .02) {
-          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 22);
+          const rg = 26 * k;
+          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rg);
           g.addColorStop(0, comAlfa(n.tom, .32 * b));
           g.addColorStop(1, comAlfa(n.tom, 0));
           ctx.fillStyle = g;
-          ctx.beginPath(); ctx.arc(p.x, p.y, 22, 0, 7); ctx.fill();
+          ctx.beginPath(); ctx.arc(p.x, p.y, rg, 0, 7); ctx.fill();
         }
 
         ctx.fillStyle = comAlfa(n.tom, .42 + f * .45 + b * .13);
         ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
 
         ctx.fillStyle = C.painel;
-        ctx.beginPath(); ctx.arc(p.x, p.y, r - 2.2, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.arc(p.x, p.y, r - 2.9 * k, 0, 7); ctx.fill();
         ctx.fillStyle = comAlfa(n.tom, .6 + f * .4);
-        ctx.beginPath(); ctx.arc(p.x, p.y, r - 3.8, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.arc(p.x, p.y, r - 5 * k, 0, 7); ctx.fill();
 
-        const lx = CX + (RX + 26) * Math.cos(p.a);
-        const ly = CY + (RY + 19) * Math.sin(p.a);
-        ctx.font = `600 ${(7.6 + f * 1.4).toFixed(1)}px "IBM Plex Mono", ui-monospace, monospace`;
+        const lx = CX + (RX + 26 * k) * Math.cos(p.a);
+        const ly = CY + (RY + 19 * k) * Math.sin(p.a);
+        ctx.font = `600 ${((8.4 + f * 1.6) * k).toFixed(1)}px "IBM Plex Mono", ui-monospace, monospace`;
         ctx.fillStyle = comAlfa(b > .3 ? n.tom : C.muted, .35 + f * .45 + b * .2);
         ctx.fillText(n.sigla, lx, ly);
       });
@@ -2352,12 +2401,15 @@ CI.views = (function () {
 
     function ajustar() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const cssW = cv.clientWidth || LW;
-      const alvoW = Math.round(cssW * dpr);
-      const alvoH = Math.round(cssW * (LH / LW) * dpr);
-      const mudou = cv.width !== alvoW || cv.height !== alvoH;
-      if (mudou) { cv.width = alvoW; cv.height = alvoH; }
-      ctx.setTransform(alvoW / LW, 0, 0, alvoW / LW, 0, 0);
+      const g = medir();
+      const mudou = g.w !== G.w || g.h !== G.h;
+      G = g;
+      const alvoW = Math.round(g.w * dpr), alvoH = Math.round(g.h * dpr);
+      if (cv.width !== alvoW || cv.height !== alvoH) {
+        cv.width = alvoW; cv.height = alvoH;
+        cv.style.height = g.h + "px";
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       return mudou;
     }
 
@@ -2418,12 +2470,15 @@ CI.views = (function () {
 
     return h("div.view",
       h("section.inicio",
-        h("span.rotulo", `${(window.CI_CONFIG || {}).EMPRESA || "Adecon"} · ciclo ${(window.CI_CONFIG || {}).ANO_CICLO || new Date().getFullYear()}`),
-        h("h1", "Uma empresa que ", h("em", "se planeja em voz alta")),
-        h("p.chamada",
-          "Os projetos internos das oito diretorias em um lugar só: cronograma por semana, ",
-          "etapas com dono e prazo, comentários onde a decisão acontece e os indicadores ",
-          "se atualizando conforme a execução anda."),
+        h("div.inicio-cabeca",
+          h("span.rotulo", `${(window.CI_CONFIG || {}).EMPRESA || "Adecon"} · ciclo ${(window.CI_CONFIG || {}).ANO_CICLO || new Date().getFullYear()}`),
+          h("h1", "Central de ", h("em", "Inovação")),
+          h("p.inicio-lema", "Uma empresa que se planeja em voz alta"),
+          h("p.chamada",
+            `Os projetos internos ${fraseDiretorias(diretoriasContaveis().length)} em um lugar só: `,
+            "cronograma por semana, etapas com dono e prazo, comentários onde a decisão ",
+            "acontece e os indicadores se atualizando conforme a execução anda.")
+        ),
 
         h("div.palco",
           palcoAnimado(),
@@ -2454,8 +2509,1194 @@ CI.views = (function () {
     );
   }
 
+  /* =========================================================================
+     BRAINSTORM — o banco de ideias aberto à empresa
+     A empresa inteira traz ideias e problemas e apoia no mural. O funil (atração,
+     qualificação, fechamento) fica atrás de uma senha, porque é decisão da inovação.
+     A página clareia de cima para baixo: a tempestade do topo vira dia no fim,
+     que é o que acontece quando ideia e problema viram projeto.
+     ====================================================================== */
+
+  const SENHA_FUNIL = "5296";
+  const TIPOS_IDEIA = ["Projeto Interno", "Ferramenta", "Processo", "Iniciativa", "Outro"];
+
+  /* No funil entram duas coisas. Uma ideia é algo que poderia ser melhor; um
+     problema é algo que já dói hoje. Passam pelas mesmas três etapas, porque
+     no fim os dois viram a mesma coisa: um projeto interno. */
+  const NATUREZAS = {
+    ideia: {
+      id: "ideia", nome: "Ideia", verbo: "Publicar ideia", icone: "raio",
+      tom: "var(--nuvem)",
+      titulo: "Em uma frase: qual é a ideia?",
+      corpo: "Opcional: como funcionaria, que problema resolve, por onde começar.",
+      convite: "Tenho uma ideia"
+    },
+    problema: {
+      id: "problema", nome: "Problema", verbo: "Trazer o problema", icone: "alerta",
+      tom: "var(--warn)",
+      titulo: "Em uma frase: o que está travando?",
+      corpo: "Opcional: onde acontece, com que frequência, quem sente na pele.",
+      convite: "Trouxe um problema"
+    }
+  };
+  const NAT = i => NATUREZAS[i && i.natureza === "problema" ? "problema" : "ideia"];
+  const ETAPAS_FUNIL = [
+    { id: "atracao",      nome: "Atração",      desc: "tudo que chegou — ideias e problemas",
+      tom: "var(--nuvem)", lavagem: "var(--nuvem-wash)" },
+    { id: "qualificacao", nome: "Qualificação", desc: "vale a pena? quem toca? quanto custa?",
+      tom: "var(--warn)",  lavagem: "var(--warn-wash)" },
+    { id: "fechamento",   nome: "Fechamento",   desc: "aprovado — daqui vira projeto interno",
+      tom: "var(--ok)",    lavagem: "var(--ok-wash)" }
+  ];
+  const ETAPA = id => ETAPAS_FUNIL.find(e => e.id === id) || ETAPAS_FUNIL[0];
+
+  let bsFiltro = "Todos";
+  let bsNat = "tudo";              // filtro do mural: tudo | ideia | problema
+  let bsNatureza = "ideia";        // o que o formulário está prestes a enviar
+  let bsOrdem = "recentes";
+  let bsArquivadas = false;
+
+  const ideiasVivas = () => db.dados.ideias.filter(i => !i.arquivada);
+  const ideiasDaEtapa = id => ideiasVivas()
+    .filter(i => (i.etapa || "atracao") === id)
+    .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0) ||
+                    String(b.criado_em).localeCompare(String(a.criado_em)));
+
+  /** Identidade de quem apoia. Com Supabase é o e-mail; sem ele, um id do navegador. */
+  function quemSou() {
+    const e = String(db.usuario?.email || db.perfil?.email || "").trim().toLowerCase();
+    if (e) return e;
+    try {
+      let a = localStorage.getItem("ci:anon");
+      if (!a) { a = "anon-" + Math.random().toString(36).slice(2, 10); localStorage.setItem("ci:anon", a); }
+      return a;
+    } catch (_) { return "anon"; }
+  }
+
+  const apoios = i => (Array.isArray(i.apoios) ? i.apoios : []);
+  const apoiei = i => apoios(i).includes(quemSou());
+
+  async function alternarApoio(i) {
+    const eu = quemSou();
+    const lista = apoios(i).slice();
+    const j = lista.indexOf(eu);
+    if (j >= 0) lista.splice(j, 1); else lista.push(eu);
+    try { await db.atualizar("ideias", i.id, { apoios: lista }); }
+    catch (err) { U.aviso("Não deu para registrar: " + err.message, "erro"); }
+  }
+
+  function funilAberto() {
+    try { return localStorage.getItem("ci:funil") === "1"; } catch (_) { return false; }
+  }
+  function guardarFunil(aberto) {
+    try { aberto ? localStorage.setItem("ci:funil", "1") : localStorage.removeItem("ci:funil"); } catch (_) {}
+  }
+
+  /* ---- a nuvem carregada ---------------------------------------------------
+     Canvas sem moldura no topo da página. A nuvem respira, o ar em volta
+     brilha e, em tempos marcados, um raio pisca — sempre mais de uma vez,
+     porque raio de verdade tremeluz. Tudo é função do tempo dentro de um
+     ciclo de 9 s, e todo termo periódico tem período que divide o ciclo:
+     o laço fecha sem emenda.
+     ---------------------------------------------------------------------- */
+
+  const DUR_CEU = 9000;
+
+  const PUFFS = [
+    { x: -134, y:  18, r: 26, f: 1.7 },
+    { x: -102, y:  -2, r: 35, f: 2.3 },
+    { x:  -64, y: -20, r: 44, f: 1.1 },
+    { x:  -14, y: -30, r: 51, f: 2.9 },
+    { x:   36, y: -19, r: 44, f: 1.5 },
+    { x:   80, y:  -3, r: 35, f: 2.1 },
+    { x:  116, y:  16, r: 26, f: 2.7 },
+    { x:  -90, y:  26, r: 29, f: 1.3 },
+    { x:  -34, y:  31, r: 35, f: 2.5 },
+    { x:   22, y:  31, r: 33, f: 1.9 },
+    { x:   76, y:  27, r: 27, f: 3.1 }
+  ];
+
+  /* Cada piscada nasce em `de`, atravessa a nuvem por dentro até `x` e, quando
+     não é `soDentro`, sai por baixo como raio de `comp` de comprimento. É assim
+     num temporal de verdade: a maior parte das descargas nunca sai da nuvem —
+     só acende ela por dentro. */
+  const PISCADAS = [
+    { t:  520, de:   34, x: -102, comp: 62, semente:  3, dur: 150 },
+    { t:  730, de:   34, x: -102, comp: 62, semente:  3, dur:  95 },
+    { t: 1650, de: -118, x:   88, comp:  0, semente:  7, dur: 190, soDentro: true },
+    { t: 2450, de:  -74, x:   66, comp: 78, semente: 11, dur: 175 },
+    { t: 2690, de:  -74, x:   66, comp: 78, semente: 11, dur:  80 },
+    { t: 3600, de:  126, x:  -96, comp:  0, semente: 19, dur: 160, soDentro: true },
+    { t: 4250, de:   96, x:  -20, comp: 54, semente: 27, dur: 105 },
+    { t: 4410, de:   96, x:  -20, comp: 54, semente: 27, dur:  65 },
+    { t: 4560, de:   96, x:  -20, comp: 54, semente: 27, dur: 135 },
+    { t: 5500, de:  -20, x:  108, comp:  0, semente: 33, dur: 210, soDentro: true },
+    { t: 6350, de:  -60, x:  122, comp: 70, semente: 41, dur: 165 },
+    { t: 7850, de:   82, x:  -56, comp: 48, semente: 55, dur: 110 },
+    { t: 8030, de:   82, x:  -56, comp: 48, semente: 55, dur:  70 }
+  ];
+
+  const fract = n => { const s = Math.sin(n) * 43758.5453; return s - Math.floor(s); };
+
+  /** Envelope de uma piscada: acende seco, apaga em curva. */
+  function forca(t, p) {
+    const d = t - p.t;
+    if (d < 0 || d > p.dur) return 0;
+    const f = d / p.dur;
+    return f < 0.18 ? 1 : Math.pow(1 - (f - 0.18) / 0.82, 2.2);
+  }
+
+  /** Filamento que corre DENTRO da nuvem, de um ponto a outro, torto no meio. */
+  function filamento(semente, ax, ay, bx, by, s = 1) {
+    const pts = [[ax, ay]];
+    const n = 12;
+    for (let i = 1; i < n; i++) {
+      const t = i / n;
+      const k = semente * 23.7 + i * 4.1;
+      pts.push([
+        ax + (bx - ax) * t + (fract(k) - 0.5) * 26 * s,
+        ay + (by - ay) * t + (fract(k + 1.7) - 0.5) * 17 * s
+      ]);
+    }
+    pts.push([bx, by]);
+    return pts;
+  }
+
+  /** Traçado quebrado do raio, sempre igual para a mesma semente. */
+  function tracado(semente, x0, y0, comp, s = 1) {
+    const pts = [[x0, y0]];
+    let x = x0;
+    for (let i = 1; i <= 5; i++) {
+      const k = semente * 17.3 + i * 5.7;
+      x += ((fract(k) - 0.5) * 26 + (fract(k + 2.1) - 0.5) * 10) * s;
+      pts.push([x, y0 + (comp * i) / 5]);
+    }
+    return pts;
+  }
+
+  let ceuNo = null;      // nó único: sobrevive ao redesenho da tela
+
+  function ceuCarregado() {
+    // O nó é reaproveitado para a animação não recomeçar a cada apoio dado.
+    // Só se refaz quando o tema muda, porque as cores vêm dos tokens.
+    const tema = U.temaEscuro() ? "escuro" : "claro";
+    if (ceuNo && ceuNo.__vivo && ceuNo.__tema === tema) return ceuNo;
+    if (ceuNo) ceuNo.__vivo = false;
+
+    const cv = h("canvas", {
+      role: "img",
+      "aria-label": "Animação: uma nuvem carregada respirando devagar, com raios " +
+                    "piscando por baixo dela — as ideias e os problemas antes de virarem projeto.",
+      estilo: { display: "block", width: "100%" }
+    });
+    const ctx = cv.getContext("2d");
+
+    const raiz = getComputedStyle(document.documentElement);
+    const tok = (n, alt) => (raiz.getPropertyValue(n).trim() || alt);
+    const C = {
+      topo:   tok("--nuvem-topo", "#5F81AE"),
+      base:   tok("--nuvem-base", "#1A2942"),
+      ar:     tok("--nuvem-ar", "rgba(94,155,224,.16)"),
+      nucleo: tok("--raio-nucleo", "#F2F8FF"),
+      halo:   tok("--raio-halo", "#7FC0FF"),
+      // dentro da nuvem o raio CLAREIA o vapor: no tema claro isso é branco,
+      // não o azul do núcleo, senão o filamento escureceria a nuvem
+      difuso: tok("--raio-difusao", "#CFE6FF"),
+      nuvem:  tok("--nuvem", "#5E9BE0")
+    };
+
+    /* Geometria em pixels de CSS, recalculada a cada quadro: a nuvem mantém um
+       tamanho próprio em vez de esticar junto com a largura da tela. Em telas
+       largas ela fica à direita, com o texto à esquerda; em telas estreitas vai
+       para o meio e o texto desce para baixo dela. */
+    let G = { w: 560, h: 300, s: 1, cx: 280, cy: 120 };
+
+    function medir() {
+      const w = Math.max(280, Math.round(cv.clientWidth || 560));
+      const largo = w >= 860;
+      const s = Math.min(1.45, Math.max(0.82, w / 1000));
+      return { w, h: largo ? 300 : 240, s, cx: largo ? w * 0.66 : w * 0.5, cy: 30 + 81 * s };
+    }
+
+    function caminhoNuvem(t) {
+      const th = (2 * Math.PI * t) / DUR_CEU;
+      const deriva = Math.sin(th) * 6 * G.s;
+      ctx.beginPath();
+      PUFFS.forEach(p => {
+        const x = G.cx + (p.x + Math.sin(th + p.f) * 3.4) * G.s + deriva;
+        const y = G.cy + (p.y + Math.sin(th + p.f * 1.3) * 2.2) * G.s;
+        const r = p.r * G.s * (1 + Math.sin(2 * th + p.f) * 0.032);
+        ctx.moveTo(x + r, y);
+        ctx.arc(x, y, r, 0, 7);
+      });
+      return deriva;
+    }
+
+    function linha(pts) {
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.stroke();
+    }
+
+    function desenharRaio(pts, a, s = 1) {
+      ctx.lineCap = "round"; ctx.lineJoin = "round";
+      ctx.strokeStyle = comAlfa(C.halo, 0.24 * a);   ctx.lineWidth = 11 * s;  linha(pts);
+      ctx.strokeStyle = comAlfa(C.halo, 0.70 * a);   ctx.lineWidth = 4.2 * s; linha(pts);
+      ctx.strokeStyle = comAlfa(C.nucleo, 0.98 * a); ctx.lineWidth = 1.7 * s; linha(pts);
+    }
+
+    /* Dentro da nuvem o raio é visto através do vapor: o brilho espalha muito
+       e o fio fica mais fraco do que o do lado de fora. */
+    function desenharFilamento(pts, a, s = 1) {
+      ctx.lineCap = "round"; ctx.lineJoin = "round";
+      ctx.strokeStyle = comAlfa(C.difuso, 0.12 * a);  ctx.lineWidth = 34 * s;  linha(pts);
+      ctx.strokeStyle = comAlfa(C.difuso, 0.22 * a);  ctx.lineWidth = 16 * s;  linha(pts);
+      ctx.strokeStyle = comAlfa(C.halo, 0.34 * a);    ctx.lineWidth = 6 * s;   linha(pts);
+      ctx.strokeStyle = comAlfa(C.nucleo, 0.58 * a);  ctx.lineWidth = 1.2 * s; linha(pts);
+    }
+
+    /* Por onde o filamento entra e sai, para o raio externo começar exatamente
+       onde o de dentro termina. */
+    function pernas(p, cx, cy, s, deriva) {
+      return {
+        ax: cx + p.de * s + deriva, ay: cy - 26 * s,
+        bx: cx + p.x * s + deriva,  by: cy + (p.soDentro ? 24 : 44) * s
+      };
+    }
+
+    /* Post-its minúsculos boiando em volta: são as ideias ainda soltas, sem
+       lugar. Cada um tem fase, amplitude e balanço próprios — parece aleatório,
+       mas é tudo função do tempo dentro do ciclo, então o laço fecha igual.
+       As cores são as das diretorias, já ajustadas ao tema. */
+    const CORES_IDEIA = (() => {
+      const ds = (db.dados.diretorias || []).map(d => U.corVisivel(d.cor)).filter(Boolean);
+      return ds.length >= 4
+        ? ds
+        : ["#F6C445", "#4ED6C0", "#FF8FA3", "#7C8CF8", "#C77DFF", "#5B9BFF"];
+    })();
+
+    const POSTITS = Array.from({ length: 14 }, (_, i) => {
+      const r = k => fract(i * 12.9898 + k * 78.233 + 4.7);
+      return {
+        bx: (r(1) - 0.5) * 2,
+        by: (r(2) - 0.5) * 2,
+        tam: 4.5 + r(3) * 4,
+        fase: r(4) * 6.2832,
+        fase2: r(5) * 6.2832,
+        ampX: 14 + r(6) * 26,
+        ampY: 10 + r(7) * 20,
+        // pouca inclinação: muito girado vira losango, e losango não é post-it
+        incl: (r(8) - 0.5) * 0.44,
+        bal: 0.08 + r(9) * 0.2,
+        frente: r(10) > 0.5,
+        alfa: 0.34 + r(11) * 0.38,
+        cor: CORES_IDEIA[Math.floor(r(12) * CORES_IDEIA.length) % CORES_IDEIA.length]
+      };
+    });
+
+    function postIt(p, i, th, s, cx, cy, brilho) {
+      const x = cx + (p.bx * 218 + Math.sin(th + p.fase) * p.ampX) * s;
+      const y = cy + (p.by * 96 + 10 + Math.sin(2 * th + p.fase2) * p.ampY) * s;
+      const ang = p.incl + Math.sin(th + p.fase2) * p.bal;
+      const lado = p.tam * s * (p.frente ? 1 : 0.8);
+      const m = lado / 2;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(ang);
+      ctx.fillStyle = "rgba(0,0,0,.26)";
+      ctx.fillRect(-m + 0.9 * s, -m + 1.2 * s, lado, lado);
+      ctx.fillStyle = comAlfa(p.cor, p.alfa);
+      ctx.fillRect(-m, -m, lado, lado);
+      // faixa de cola no topo: é o que faz ler como post-it, e não como confete
+      ctx.fillStyle = comAlfa("#FFFFFF", p.alfa * 0.4);
+      ctx.fillRect(-m, -m, lado, lado * 0.3);
+      // o relâmpago bate neles também
+      if (brilho > 0.02) {
+        ctx.fillStyle = comAlfa(C.nucleo, 0.3 * brilho * p.alfa);
+        ctx.fillRect(-m, -m, lado, lado);
+      }
+      ctx.restore();
+    }
+
+    function desenharCena(t) {
+      const { w, h, s, cx, cy } = G;
+      ctx.clearRect(0, 0, w, h);
+
+      const th = (2 * Math.PI * t) / DUR_CEU;
+      const deriva = Math.sin(th) * 6 * s;
+
+      /* o que está aceso agora */
+      let brilho = 0, focoX = cx, focoY = cy + 52 * s;
+      const acesos = [];
+      PISCADAS.forEach(p => {
+        const a = forca(t, p);
+        if (a <= 0.002) return;
+        acesos.push({ p, a });
+        if (a > brilho) {
+          brilho = a;
+          focoX = cx + ((p.de + p.x) / 2) * s + deriva;
+          focoY = cy + (p.soDentro ? 4 : 40) * s;
+        }
+      });
+
+      /* ar carregado em volta */
+      const ar = ctx.createRadialGradient(cx, cy + 10 * s, 10, cx, cy + 10 * s, 260 * s);
+      ar.addColorStop(0, C.ar);
+      ar.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = ar;
+      ctx.fillRect(0, 0, w, h);
+
+      if (brilho > 0.01) {
+        const g = ctx.createRadialGradient(focoX, focoY, 4, focoX, focoY, 190 * s);
+        g.addColorStop(0, comAlfa(C.halo, 0.30 * brilho));
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, w, h);
+      }
+
+      /* os post-its que passam POR TRÁS da nuvem */
+      POSTITS.forEach((p, i) => { if (!p.frente) postIt(p, i, th, s, cx, cy, brilho); });
+
+      /* halo macio da silhueta — é o que dispensa qualquer borda */
+      ctx.save();
+      ctx.shadowColor = comAlfa(C.base, 0.5);
+      ctx.shadowBlur = 24 * s;
+      ctx.shadowOffsetY = 7 * s;
+      ctx.fillStyle = comAlfa(C.base, 0.92);
+      caminhoNuvem(t);
+      ctx.fill();
+      ctx.restore();
+
+      /* corpo: claro em cima, pesado na barriga */
+      ctx.save();
+      caminhoNuvem(t);
+      ctx.clip();
+
+      const corpo = ctx.createLinearGradient(0, cy - 66 * s, 0, cy + 62 * s);
+      corpo.addColorStop(0, C.topo);
+      corpo.addColorStop(0.46, comAlfa(C.base, 0.86));
+      corpo.addColorStop(1, C.base);
+      ctx.fillStyle = corpo;
+      ctx.fillRect(0, 0, w, h);
+
+      /* topos iluminados */
+      [[-64, -40, 34], [-14, -50, 40], [36, -39, 34], [80, -22, 26]].forEach(([dx, dy, rr], k) => {
+        const x = cx + dx * s + deriva;
+        const y = cy + (dy + Math.sin(th + k) * 2) * s;
+        const r = rr * s;
+        const g = ctx.createRadialGradient(x, y, 1, x, y, r);
+        g.addColorStop(0, comAlfa(C.topo, 0.5));
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      });
+
+      /* a barriga acende por dentro quando a descarga nasce */
+      if (brilho > 0.01) {
+        const g = ctx.createRadialGradient(focoX, focoY - 16 * s, 2, focoX, focoY - 16 * s, 130 * s);
+        g.addColorStop(0, comAlfa(C.nucleo, 0.5 * brilho));
+        g.addColorStop(0.4, comAlfa(C.halo, 0.28 * brilho));
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, w, h);
+      }
+
+      /* O RAIO POR DENTRO — ainda dentro do recorte, então ele corre pela nuvem
+         e some ao encostar na silhueta, como se estivesse mesmo lá dentro. */
+      acesos.forEach(({ p, a }) => {
+        const { ax, ay, bx, by } = pernas(p, cx, cy, s, deriva);
+        const pts = filamento(p.semente, ax, ay, bx, by, s);
+        desenharFilamento(pts, a, s);
+        // ramos curtos saindo do caminho principal
+        [2, 5].forEach((k, j) => {
+          const o = pts[k];
+          desenharFilamento([
+            o,
+            [o[0] + (fract(p.semente + k) - 0.5) * 52 * s, o[1] + (j ? 22 : -20) * s],
+            [o[0] + (fract(p.semente + k + 3) - 0.5) * 78 * s, o[1] + (j ? 38 : -32) * s]
+          ], a * 0.55, s);
+        });
+      });
+      ctx.restore();
+
+      /* o que sai por baixo, começando onde o filamento terminou */
+      acesos.forEach(({ p, a }) => {
+        if (p.soDentro || !p.comp) return;
+        const { bx, by } = pernas(p, cx, cy, s, deriva);
+        const pts = tracado(p.semente, bx, by, p.comp * s, s);
+        desenharRaio(pts, a, s);
+        // uma bifurcação curta, para não parecer um traço só
+        const b = pts[2];
+        desenharRaio([
+          b,
+          [b[0] - (13 + fract(p.semente) * 9) * s, b[1] + 15 * s],
+          [b[0] - (20 + fract(p.semente + 1) * 12) * s, b[1] + 30 * s]
+        ], a * 0.7, s);
+      });
+
+      /* os post-its que passam NA FRENTE */
+      POSTITS.forEach((p, i) => { if (p.frente) postIt(p, i, th, s, cx, cy, brilho); });
+    }
+
+    function ajustar() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const g = medir();
+      const mudou = g.w !== G.w || g.h !== G.h;
+      G = g;
+      const alvoW = Math.round(g.w * dpr), alvoH = Math.round(g.h * dpr);
+      if (cv.width !== alvoW || cv.height !== alvoH) {
+        cv.width = alvoW; cv.height = alvoH;
+        cv.style.height = g.h + "px";
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return mudou;
+    }
+
+    /* Com "reduzir movimento" no sistema a cena abre parada, e o botão fica em
+       destaque. A escolha é a mesma da página inicial: quem já deu play, já deu. */
+    const pedeQuieto = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let escolha = null;
+    try { escolha = localStorage.getItem("ci:animacao"); } catch (_) {}
+    let rodando = escolha ? escolha === "rodando" : !pedeQuieto;
+
+    const botao = h("button.palco-play", { type: "button" });
+    function pintarBotao() {
+      U.limpar(botao);
+      botao.appendChild(ic(rodando ? "pausa" : "tocar"));
+      botao.appendChild(h("span", rodando ? "Pausar" : "Reproduzir"));
+      botao.setAttribute("aria-label", rodando ? "Pausar a animação" : "Reproduzir a animação");
+      botao.classList.toggle("destaque", !rodando);
+    }
+    botao.addEventListener("click", () => {
+      rodando = !rodando;
+      try { localStorage.setItem("ci:animacao", rodando ? "rodando" : "parado"); } catch (_) {}
+      pintarBotao();
+    });
+    pintarBotao();
+
+    const no = h("div.ceu",
+      cv, botao,
+      h("div.ceu-titulo",
+        h("h1", "Brainstorm"),
+        h("p", "Traga o que te incomoda e o que você faria diferente. Ideia ou problema, " +
+               "os dois descem o mesmo funil e saem do outro lado como projeto interno.")
+      )
+    );
+    no.__vivo = true;
+    no.__tema = tema;
+
+    let tCena = 0, anterior = performance.now(), ausente = 0, precisaPintar = true;
+
+    function quadro(agora) {
+      if (!no.__vivo) return;               // trocou o tema: este laço acabou
+      if (!cv.isConnected) {
+        // a tela foi trocada: espera um pouco antes de desistir do laço
+        if (++ausente > 420) { no.__vivo = false; return; }
+        anterior = agora;
+        return requestAnimationFrame(quadro);
+      }
+      ausente = 0;
+
+      /* fade pela rolagem: some conforme a página sobe, sem depender de evento */
+      const rolador = cv.closest(".conteudo");
+      let visivel = 1;
+      if (rolador) {
+        const alt = no.offsetHeight || 240;
+        const p = Math.min(1, Math.max(0, rolador.scrollTop / (alt * 0.8)));
+        visivel = 1 - p;
+        no.style.setProperty("--fade", visivel.toFixed(3));
+        no.style.setProperty("--desloc", (rolador.scrollTop * 0.18).toFixed(1) + "px");
+      }
+
+      const dt = Math.min(agora - anterior, 50);
+      anterior = agora;
+      const redimensionou = ajustar();
+      const anda = rodando && visivel > 0.02;
+      if (anda) { tCena = (tCena + dt) % DUR_CEU; precisaPintar = true; }
+      if (precisaPintar || redimensionou) {
+        desenharCena(tCena);
+        precisaPintar = anda;
+      }
+      requestAnimationFrame(quadro);
+    }
+    requestAnimationFrame(quadro);
+
+    cv.__cena = desenharCena;
+    ceuNo = no;
+    return no;
+  }
+
+  /* ---- o sol do fim da página ----------------------------------------------
+     A nuvem abre a página com post-its soltos; o sol a fecha com ferramentas
+     em órbita. É o mesmo ciclo de 9 s, e toda volta é múltiplo inteiro dele,
+     então o laço fecha sem emenda. As ferramentas são os próprios ícones da
+     Central: o que a empresa ganha quando ideia e problema viram projeto.
+     ---------------------------------------------------------------------- */
+
+  const FERRAMENTAS = [
+    { icone: "cronograma", r: 1.00, k:  1, giro:  1, tam: 21, fase: 0.00 },
+    { icone: "painel",     r: 0.80, k: -1, giro: -1, tam: 18, fase: 1.90 },
+    { icone: "camadas",    r: 1.20, k:  1, giro:  1, tam: 20, fase: 3.05 },
+    { icone: "ajustes",    r: 0.92, k:  2, giro: -1, tam: 17, fase: 4.60 },
+    { icone: "elo",        r: 1.34, k: -1, giro:  1, tam: 19, fase: 0.95 },
+    { icone: "lapis",      r: 0.72, k:  2, giro:  1, tam: 16, fase: 5.55 },
+    { icone: "pulso",      r: 1.12, k: -2, giro: -1, tam: 20, fase: 2.45 },
+    { icone: "check",      r: 1.44, k:  1, giro:  1, tam: 17, fase: 3.90 },
+    { icone: "caixa",      r: 0.88, k: -1, giro: -1, tam: 19, fase: 5.10 },
+    { icone: "correio",    r: 1.28, k:  2, giro:  1, tam: 17, fase: 1.35 }
+  ];
+
+  let solNo = null;
+
+  function solAnimado() {
+    const tema = U.temaEscuro() ? "escuro" : "claro";
+    if (solNo && solNo.__vivo && solNo.__tema === tema) return solNo;
+    if (solNo) solNo.__vivo = false;
+
+    const cv = h("canvas", {
+      role: "img",
+      "aria-label": "Animação: um sol nascendo com pequenas ferramentas em órbita — " +
+                    "as ideias e os problemas já viraram projeto.",
+      estilo: { display: "block", width: "100%" }
+    });
+    const ctx = cv.getContext("2d");
+
+    const raiz = getComputedStyle(document.documentElement);
+    const tok = (n, alt) => (raiz.getPropertyValue(n).trim() || alt);
+    const C = {
+      nucleo: tok("--sol-nucleo", "#FFE8BC"),
+      corpo:  tok("--sol-corpo", "#FFB busy"),
+      halo:   tok("--sol-halo", "#FFA23C"),
+      raio:   tok("--sol-raio", "#FFC46A"),
+      fer:    tok("--ferramenta", "#F6EBD8"),
+      ferHalo: tok("--ferramenta-halo", "rgba(6,16,28,.45)")
+    };
+    if (!/^#[0-9a-f]{6}$/i.test(C.corpo)) C.corpo = "#FFC061";
+
+    const traco = {};
+    FERRAMENTAS.forEach(f => {
+      const d = (U.CAMINHOS || {})[f.icone];
+      if (d) traco[f.icone] = new Path2D(d);
+    });
+
+    let G = { w: 720, h: 300, cx: 360, cy: 190, r: 46, s: 1 };
+    function medir() {
+      const w = Math.max(300, Math.round(cv.clientWidth || 720));
+      const alt = Math.round(Math.max(230, Math.min(360, w * 0.30)));
+      const s = Math.min(1.35, Math.max(0.82, w / 900));
+      return { w, h: alt, cx: w / 2, cy: alt * 0.55, r: 44 * s, s };
+    }
+
+    function desenharFerramenta(f, ang, x, y, giro, a) {
+      const p = traco[f.icone];
+      if (!p) return;
+      const lado = f.tam * G.s;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(giro);
+      ctx.scale(lado / 24, lado / 24);
+      ctx.translate(-12, -12);
+      ctx.lineCap = "round"; ctx.lineJoin = "round";
+      // um contorno por baixo destaca a ferramenta do céu: escuro no tema
+      // escuro, claro no tema claro, senão ela engrossa em vez de sobressair
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = C.ferHalo;
+      ctx.lineWidth = 5 * (24 / lado);
+      ctx.stroke(p);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = comAlfa(C.fer, a);
+      ctx.lineWidth = 2.1 * (24 / lado);
+      ctx.stroke(p);
+      ctx.restore();
+    }
+
+    function desenharCena(t) {
+      const { w, h, cx, cy, r, s } = G;
+      ctx.clearRect(0, 0, w, h);
+      const th = (2 * Math.PI * t) / DUR_CEU;
+      const pulsa = 0.5 + 0.5 * Math.sin(2 * th);
+
+      /* o ar quente em volta */
+      const ar = ctx.createRadialGradient(cx, cy, r * 0.4, cx, cy, r * 7);
+      ar.addColorStop(0, comAlfa(C.halo, 0.22));
+      ar.addColorStop(0.45, comAlfa(C.halo, 0.07));
+      ar.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = ar;
+      ctx.fillRect(0, 0, w, h);
+
+      /* ferramentas de trás */
+      const orbes = FERRAMENTAS.map(f => {
+        const a = f.fase + f.k * th;
+        return {
+          f, a,
+          x: cx + Math.cos(a) * r * 3.05 * f.r,
+          y: cy + Math.sin(a) * r * 1.16 * f.r,
+          frente: Math.sin(a) > 0,
+          // balanço em vez de cambalhota: ferramenta flutuando, não entulho girando
+          giro: f.giro * 0.22 + Math.sin(th + f.fase) * 0.3
+        };
+      });
+      orbes.filter(o => !o.frente)
+           .forEach(o => desenharFerramenta(o.f, o.a, o.x, o.y, o.giro, 0.55));
+
+      /* raios */
+      /* Os raios não giram: cada um respira no seu tempo. Girar o anel exigiria
+         uma volta inteira por ciclo para o laço fechar, e isso fica frenético. */
+      ctx.save();
+      ctx.translate(cx, cy);
+      for (let i = 0; i < 12; i++) {
+        const comp = r * (0.40 + 0.20 * Math.sin(2 * th + i * 1.7)) + r * 0.32;
+        ctx.rotate((Math.PI * 2) / 12);
+        ctx.strokeStyle = comAlfa(C.raio, 0.18 + 0.14 * pulsa);
+        ctx.lineWidth = 2.4 * s;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(r * 1.16, 0);
+        ctx.lineTo(r * 1.16 + comp, 0);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      /* coroa e disco */
+      const coroa = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 2.1);
+      coroa.addColorStop(0, comAlfa(C.halo, 0.46 + 0.1 * pulsa));
+      coroa.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = coroa;
+      ctx.beginPath(); ctx.arc(cx, cy, r * 2.1, 0, 7); ctx.fill();
+
+      const disco = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.34, r * 0.1, cx, cy, r);
+      disco.addColorStop(0, C.nucleo);
+      disco.addColorStop(0.62, C.corpo);
+      disco.addColorStop(1, C.halo);
+      ctx.fillStyle = disco;
+      ctx.beginPath(); ctx.arc(cx, cy, r * (1 + 0.016 * pulsa), 0, 7); ctx.fill();
+
+      /* ferramentas da frente */
+      orbes.filter(o => o.frente)
+           .forEach(o => desenharFerramenta(o.f, o.a, o.x, o.y, o.giro, 0.92));
+    }
+
+    function ajustar() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const g = medir();
+      const mudou = g.w !== G.w || g.h !== G.h;
+      G = g;
+      const aw = Math.round(g.w * dpr), ah = Math.round(g.h * dpr);
+      if (cv.width !== aw || cv.height !== ah) {
+        cv.width = aw; cv.height = ah;
+        cv.style.height = g.h + "px";
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return mudou;
+    }
+
+    const pedeQuieto = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let escolha = null;
+    try { escolha = localStorage.getItem("ci:animacao"); } catch (_) {}
+    const rodando = escolha ? escolha === "rodando" : !pedeQuieto;
+
+    const no = h("div.sol", cv);
+    no.__vivo = true;
+    no.__tema = tema;
+
+    let tCena = 0, anterior = performance.now(), ausente = 0, precisaPintar = true;
+
+    function quadro(agora) {
+      if (!no.__vivo) return;
+      if (!cv.isConnected) {
+        if (++ausente > 420) { no.__vivo = false; return; }
+        anterior = agora;
+        return requestAnimationFrame(quadro);
+      }
+      ausente = 0;
+
+      /* o sol nasce quando você chega nele: nada de animar fora da vista */
+      const rolador = cv.closest(".conteudo");
+      let visivel = 1;
+      if (rolador) {
+        const r = cv.getBoundingClientRect(), rr = rolador.getBoundingClientRect();
+        const entrada = (rr.bottom - r.top) / (r.height * 0.8);
+        visivel = Math.min(1, Math.max(0, entrada));
+        no.style.setProperty("--surge", visivel.toFixed(3));
+        no.style.setProperty("--sobe", ((1 - visivel) * 26).toFixed(1) + "px");
+      }
+
+      const dt = Math.min(agora - anterior, 50);
+      anterior = agora;
+      const redimensionou = ajustar();
+      const anda = rodando && visivel > 0.02;
+      if (anda) { tCena = (tCena + dt) % DUR_CEU; precisaPintar = true; }
+      if (precisaPintar || redimensionou) {
+        desenharCena(tCena);
+        precisaPintar = anda;
+      }
+      requestAnimationFrame(quadro);
+    }
+    requestAnimationFrame(quadro);
+
+    cv.__cena = desenharCena;
+    solNo = no;
+    return no;
+  }
+
+  function blocoSol() {
+    return h("section.sol-fim",
+      solAnimado(),
+      h("div.sol-texto",
+        h("span.rotulo", "fim do funil"),
+        h("p", "O que entrou como ideia ou como problema sai daqui virado projeto " +
+               "interno — com dono, prazo e lugar no cronograma.")
+      )
+    );
+  }
+
+  /* ---- mural --------------------------------------------------------------- */
+
+  function botaoRaio(i) {
+    const n = apoios(i).length;
+    const meu = apoiei(i);
+    const b = h("button.bs-raio", {
+      type: "button",
+      "aria-pressed": meu ? "true" : "false",
+      title: meu ? "Tirar seu apoio" : "Apoiar esta ideia",
+      onclick: () => alternarApoio(i)
+    }, ic("raio"), h("span", String(n)));
+    return b;
+  }
+
+  function cartaoIdeia(i, destravado) {
+    const nat = NAT(i);
+    const tom = i.diretoria_id ? corDiretoria(i.diretoria_id) : nat.tom;
+    const et = ETAPA(i.etapa);
+    return h("article.bs-cartao" + (nat.id === "problema" ? ".problema" : ""),
+      { estilo: { "--tom": tom, "--nat": nat.tom } },
+      h("div.bs-topo",
+        h("span.bs-nat", { estilo: { "--tom": nat.tom } }, ic(nat.icone), nat.nome),
+        chip(i.tipo || "Outro", null, tom),
+        destravado ? h("span.bs-selo-etapa", { estilo: { "--tom": et.tom } }, et.nome) : null,
+        botaoRaio(i)
+      ),
+      h("h3", i.titulo),
+      i.descricao ? h("p.corpo", i.descricao) : null,
+      h("div.rodape",
+        h("span.autoria",
+          (i.autor || "anônimo") +
+          (i.diretoria_id ? " · " + (db.diretoria(i.diretoria_id)?.sigla || "") : "") +
+          " · " + U.relativo(i.criado_em))
+      )
+    );
+  }
+
+  function painelEnvio() {
+    let natureza = bsNatureza;
+
+    const fTitulo = entrada({
+      class: "bs-titulo", placeholder: NATUREZAS[natureza].titulo, maxlength: 160,
+      onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); enviar(); } }
+    });
+    const fDesc = area({ rows: 3, placeholder: NATUREZAS[natureza].corpo });
+    const fTipo = selecao(TIPOS_IDEIA, { value: "Iniciativa" });
+
+    /* O que muda entre ideia e problema é só a pergunta e o tom — os campos são
+       os mesmos, porque os dois seguem o mesmo caminho até virar projeto. */
+    const botao = h("button.btn.btn-primario", { type: "button", onclick: () => enviar() });
+    const escolha = h("div.bs-natureza", { role: "group", "aria-label": "O que você está trazendo" });
+
+    function pintarNatureza() {
+      const n = NATUREZAS[natureza];
+      U.limpar(escolha);
+      Object.values(NATUREZAS).forEach(o => {
+        escolha.appendChild(h("button.bs-nat-opcao" + (o.id === natureza ? ".ativa" : ""), {
+          type: "button", "aria-pressed": o.id === natureza ? "true" : "false",
+          estilo: { "--tom": o.tom },
+          onclick: () => { natureza = bsNatureza = o.id; pintarNatureza(); fTitulo.focus(); }
+        }, ic(o.icone), o.convite));
+      });
+      fTitulo.placeholder = n.titulo;
+      fDesc.placeholder = n.corpo;
+      U.limpar(botao);
+      botao.appendChild(ic(n.icone));
+      botao.appendChild(h("span", n.verbo));
+      botao.style.setProperty("--tom", n.tom);
+      botao.classList.toggle("bs-enviar-problema", natureza === "problema");
+    }
+    const fDir = selecao([["", "Não sei ainda"], ...db.dados.diretorias.map(d => [d.id, d.nome])], { value: "" });
+    const fAutor = entrada({ value: db.perfil?.nome && db.perfil.nome !== "Você" ? db.perfil.nome : "", placeholder: "Seu nome" });
+
+    async function enviar() {
+      const n = NATUREZAS[natureza];
+      const titulo = fTitulo.value.trim();
+      if (!titulo) {
+        U.aviso(natureza === "problema" ? "Descreva o problema primeiro." : "Escreva a ideia primeiro.", "alerta");
+        fTitulo.focus();
+        return;
+      }
+      const autor = fAutor.value.trim();
+      try {
+        await db.criar("ideias", {
+          titulo,
+          descricao: fDesc.value.trim() || null,
+          natureza,
+          tipo: fTipo.value,
+          diretoria_id: fDir.value || null,
+          autor: autor || null,
+          email: String(db.usuario?.email || db.perfil?.email || "").trim() || null,
+          etapa: "atracao",
+          ordem: ideiasDaEtapa("atracao").length,
+          apoios: [],
+          arquivada: false
+        });
+        if (autor) db.salvarPerfil({ nome: autor });
+        fTitulo.value = ""; fDesc.value = "";
+        U.aviso(natureza === "problema" ? "Problema registrado" : "Ideia no ar", "ok", n.icone);
+        fTitulo.focus();
+      } catch (err) { U.aviso("Não salvou: " + err.message, "erro"); }
+    }
+
+    pintarNatureza();
+
+    const vivas = ideiasVivas();
+    const nIdeias = vivas.filter(i => NAT(i).id === "ideia").length;
+    const nProblemas = vivas.length - nIdeias;
+
+    return h("section.painel",
+      h("div.painel-hd",
+        h("h2", "Solte aqui"),
+        h("div.acoes",
+          chip(`${nIdeias} ideia${nIdeias === 1 ? "" : "s"}`),
+          chip(`${nProblemas} problema${nProblemas === 1 ? "" : "s"}`))
+      ),
+      h("div.painel-bd",
+        h("div.bs-envio",
+          escolha,
+          fTitulo,
+          fDesc,
+          h("div.linha-campos",
+            campo("Isto é", fTipo),
+            campo("Diretoria", fDir),
+            campo("Seu nome", fAutor)
+          ),
+          h("div.bs-envio-pe",
+            h("span.dica", "Não precisa estar resolvido nem pronto. Tudo entra em Atração " +
+                           "e a equipe de inovação cuida do resto."),
+            botao
+          )
+        )
+      )
+    );
+  }
+
+  function painelMural(destravado) {
+    const todas = ideiasVivas();
+
+    let lista = bsNat === "tudo" ? todas.slice() : todas.filter(i => NAT(i).id === bsNat);
+    const tipos = ["Todos", ...TIPOS_IDEIA.filter(t => lista.some(i => i.tipo === t))];
+    if (!tipos.includes(bsFiltro)) bsFiltro = "Todos";
+    if (bsFiltro !== "Todos") lista = lista.filter(i => i.tipo === bsFiltro);
+
+    lista.sort(bsOrdem === "apoios"
+      ? (a, b) => apoios(b).length - apoios(a).length || String(b.criado_em).localeCompare(String(a.criado_em))
+      : (a, b) => String(b.criado_em).localeCompare(String(a.criado_em)));
+
+    const porNatureza = [
+      { id: "tudo", nome: "Tudo", icone: null, tom: null },
+      { id: "ideia", nome: "Ideias", icone: "raio", tom: "var(--nuvem)" },
+      { id: "problema", nome: "Problemas", icone: "alerta", tom: "var(--warn)" }
+    ].map(o => h("button.bs-filtro.forte" + (bsNat === o.id ? ".marcado" : ""), {
+      type: "button", "aria-pressed": bsNat === o.id ? "true" : "false",
+      estilo: o.tom ? { "--tom": o.tom } : {},
+      onclick: () => { bsNat = o.id; CI.app.recarregarVista(); }
+    }, o.icone ? ic(o.icone) : null, o.nome));
+
+    const filtros = tipos.map(t => h("button.bs-filtro", {
+      type: "button", "aria-pressed": bsFiltro === t ? "true" : "false",
+      onclick: () => { bsFiltro = t; CI.app.recarregarVista(); }
+    }, t));
+
+    const ordenar = h("button.bs-filtro", {
+      type: "button",
+      onclick: () => { bsOrdem = bsOrdem === "apoios" ? "recentes" : "apoios"; CI.app.recarregarVista(); }
+    }, ic(bsOrdem === "apoios" ? "raio" : "relogio"),
+       bsOrdem === "apoios" ? "Mais apoiadas" : "Mais recentes");
+
+    return h("section.painel",
+      h("div.painel-hd",
+        h("h2", "No ar"),
+        h("div.acoes", ordenar)
+      ),
+      h("div.painel-bd",
+        h("div.bs-filtros", { estilo: { marginBottom: "9px" } }, ...porNatureza),
+        tipos.length > 1
+          ? h("div.bs-filtros", { estilo: { marginBottom: "13px" } }, ...filtros)
+          : null,
+        lista.length
+          ? h("div.bs-mural", ...lista.map(i => cartaoIdeia(i, destravado)))
+          : U.vazio("tempestade",
+              bsNat === "problema" ? "Nenhum problema trazido" : "O mural está limpo",
+              "O primeiro registro da empresa começa no campo aí em cima.")
+      )
+    );
+  }
+
+  /* ---- funil --------------------------------------------------------------- */
+
+  async function gravarFunil(grade) {
+    const mudancas = [];
+    grade.querySelectorAll(".funil-faixa").forEach(faixa => {
+      const etapa = faixa.dataset.etapa;
+      [...faixa.querySelectorAll(".funil-cartao")].forEach((el, n) => {
+        mudancas.push({ id: el.dataset.id, etapa, ordem: n });
+      });
+    });
+    try {
+      const n = await db.moverIdeias(mudancas);
+      if (n) U.aviso("Funil atualizado", "ok");
+    } catch (err) {
+      U.aviso("Não deu para salvar: " + err.message, "erro");
+    }
+    CI.app.recarregarVista();
+  }
+
+  function ligarFunil(grade) {
+    let cartao = null, rolador = null;
+
+    const faixas = () => [...grade.querySelectorAll(".funil-faixa")];
+
+    grade.addEventListener("pointerdown", ev => {
+      const alca = ev.target.closest(".funil-puxador");
+      if (!alca || ev.button !== 0) return;
+      cartao = alca.closest(".funil-cartao");
+      if (!cartao) return;
+      rolador = grade.closest(".conteudo");
+      cartao.classList.add("movendo");
+      grade.classList.add("reordenando");
+      cartao.style.pointerEvents = "none";   // libera elementFromPoint
+      alca.setPointerCapture(ev.pointerId);
+      ev.preventDefault();
+    });
+
+    grade.addEventListener("pointermove", ev => {
+      if (!cartao) return;
+      ev.preventDefault();
+
+      const sob = document.elementFromPoint(ev.clientX, ev.clientY);
+      const faixa = sob && sob.closest(".funil-faixa");
+      if (faixa) {
+        faixas().forEach(f => f.classList.toggle("alvo", f === faixa));
+        const lista = faixa.querySelector(".funil-lista");
+        const alvo = sob.closest(".funil-cartao");
+        if (alvo && alvo !== cartao && alvo.parentElement === lista) {
+          const meio = alvo.getBoundingClientRect().top + alvo.offsetHeight / 2;
+          lista.insertBefore(cartao, ev.clientY < meio ? alvo : alvo.nextSibling);
+        } else if (!alvo && cartao.parentElement !== lista) {
+          lista.appendChild(cartao);
+        }
+      }
+
+      if (rolador) {
+        const r = rolador.getBoundingClientRect();
+        if (ev.clientY < r.top + 70) rolador.scrollTop -= 14;
+        else if (ev.clientY > r.bottom - 70) rolador.scrollTop += 14;
+      }
+    });
+
+    const soltar = () => {
+      if (!cartao) return;
+      cartao.style.pointerEvents = "";
+      cartao.classList.remove("movendo");
+      grade.classList.remove("reordenando");
+      faixas().forEach(f => f.classList.remove("alvo"));
+      cartao = null;
+      gravarFunil(grade);
+    };
+
+    grade.addEventListener("pointerup", soltar);
+    grade.addEventListener("pointercancel", soltar);
+  }
+
+  async function moverIdeiaEtapa(i, passo) {
+    const idx = ETAPAS_FUNIL.findIndex(e => e.id === (i.etapa || "atracao"));
+    const alvo = ETAPAS_FUNIL[idx + passo];
+    if (!alvo) return;
+    try {
+      await db.moverIdeias([{ id: i.id, etapa: alvo.id, ordem: ideiasDaEtapa(alvo.id).length }]);
+      U.aviso(`“${i.titulo.slice(0, 28)}${i.titulo.length > 28 ? "…" : ""}” → ${alvo.nome}`, "ok");
+    } catch (err) { U.aviso(err.message, "erro"); }
+  }
+
+  /** "3 ideias · 1 problema" — ou só o que existir na faixa. */
+  function contagemFaixa(lista) {
+    const p = lista.filter(i => NAT(i).id === "problema").length;
+    const d = lista.length - p;
+    const partes = [];
+    if (d) partes.push(`${d} ideia${d === 1 ? "" : "s"}`);
+    if (p) partes.push(`${p} problema${p === 1 ? "" : "s"}`);
+    return partes.length ? partes.join(" · ") : "vazio";
+  }
+
+  function cartaoFunil(i, idx) {
+    const nat = NAT(i);
+    const tom = i.diretoria_id ? corDiretoria(i.diretoria_id) : nat.tom;
+    const nApoios = apoios(i).length;
+
+    return h("article.funil-cartao", { dataset: { id: i.id }, estilo: { "--tom": tom } },
+      h("div", { estilo: { display: "flex", alignItems: "flex-start", gap: "6px" } },
+        h("i.funil-nat", { estilo: { "--tom": nat.tom }, title: nat.nome }, ic(nat.icone)),
+        h("span.nome", { estilo: { flex: "1 1 auto", minWidth: 0 } }, i.titulo),
+        h("button.funil-puxador", {
+          type: "button", "aria-label": "Arrastar para outra etapa", title: "Arraste para mover",
+          onkeydown: e => {
+            if (e.key === "ArrowRight") { e.preventDefault(); moverIdeiaEtapa(i, 1); }
+            if (e.key === "ArrowLeft") { e.preventDefault(); moverIdeiaEtapa(i, -1); }
+          }
+        }, ic("arrastar"))
+      ),
+      h("div.acoes",
+        h("span.meta",
+          (i.autor || "anônimo") + (nApoios ? ` · ${nApoios} ${nApoios === 1 ? "raio" : "raios"}` : "")),
+        h("span.botoes",
+          h("button.btn.btn-fantasma.btn-icone.btn-p", {
+            type: "button", "aria-label": "Voltar uma etapa", title: "Voltar uma etapa",
+            disabled: idx === 0, onclick: () => moverIdeiaEtapa(i, -1)
+          }, ic("setaEsq")),
+          h("button.btn.btn-fantasma.btn-icone.btn-p", {
+            type: "button", "aria-label": "Avançar uma etapa", title: "Avançar uma etapa",
+            disabled: idx === ETAPAS_FUNIL.length - 1, onclick: () => moverIdeiaEtapa(i, 1)
+          }, ic("setaDir")),
+          idx === ETAPAS_FUNIL.length - 1
+            ? h("button.btn.btn-p", {
+                type: "button", title: "Abrir o formulário de projeto já preenchido",
+                onclick: () => modalProjeto(null, {
+                  nome: i.titulo,
+                  objetivo: i.descricao || "",
+                  diretoria_id: i.diretoria_id || db.dados.diretorias[0]?.id || null,
+                  tipo: TIPOS.includes(i.tipo) ? i.tipo : "Projeto Interno"
+                })
+              }, ic("mais"), "Virar projeto")
+            : null,
+          h("button.btn.btn-fantasma.btn-icone.btn-p", {
+            type: "button", "aria-label": "Arquivar", title: "Arquivar (sai do mural, não se perde)",
+            onclick: async () => {
+              try {
+                await db.atualizar("ideias", i.id, { arquivada: true });
+                U.aviso("Arquivada", "info");
+              } catch (err) { U.aviso(err.message, "erro"); }
+            }
+          }, ic("caixa"))
+        )
+      )
+    );
+  }
+
+  function painelFunil() {
+    if (!funilAberto()) {
+      const fSenha = entrada({
+        type: "password", inputmode: "numeric", maxlength: 8, autocomplete: "off",
+        "aria-label": "Senha do funil",
+        onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); tentar(); } }
+      });
+      function tentar() {
+        if (fSenha.value.trim() !== SENHA_FUNIL) {
+          U.aviso("Senha incorreta.", "erro");
+          fSenha.value = ""; fSenha.focus();
+          return;
+        }
+        guardarFunil(true);
+        U.aviso("Funil destravado neste navegador", "ok");
+        CI.app.recarregarVista();
+      }
+      return h("section.painel",
+        h("div.painel-hd", h("h2", "Funil de inovação"), h("div.acoes", chip("restrito"))),
+        h("div.painel-bd",
+          h("div.bs-tranca",
+            ic("cadeado"),
+            h("h3", "O funil é da equipe de inovação"),
+            h("p", "Aqui as ideias e os problemas passam por atração, qualificação e " +
+                   "fechamento até virarem projeto. Quem publica no mural não precisa ver " +
+                   "esta parte — e ela fica destravada neste navegador depois da primeira vez."),
+            h("div.bs-tranca-form",
+              fSenha,
+              h("button.btn.btn-primario", { type: "button", onclick: tentar }, ic("destravar"), "Destravar")
+            )
+          )
+        )
+      );
+    }
+
+    const total = ideiasVivas().length;
+    const arquivadas = db.dados.ideias.filter(i => i.arquivada);
+
+    const grade = h("div.funil", ...ETAPAS_FUNIL.map((et, idx) => {
+      const daEtapa = ideiasDaEtapa(et.id);
+      return h("div.funil-faixa", {
+        dataset: { etapa: et.id },
+        estilo: { "--tom": et.tom, "--lavagem": et.lavagem }
+      },
+        h("div.funil-parede"),
+        h("div.funil-miolo"),
+        h("div.funil-hd",
+          h("span.rotulo", et.nome),
+          h("span.cont", contagemFaixa(daEtapa)),
+          h("span.desc", et.desc)
+        ),
+        h("div.funil-lista", ...daEtapa.map(i => cartaoFunil(i, idx)))
+      );
+    }));
+    ligarFunil(grade);
+
+    const fecham = ideiasDaEtapa("fechamento").length;
+    const conv = total ? Math.round((fecham / total) * 100) : 0;
+
+    return h("section.painel.painel-funil",
+      h("div.painel-hd",
+        h("h2", "Funil de inovação"),
+        h("div.acoes",
+          chip(`${conv}% chegaram ao fechamento`, conv >= 30 ? "ok" : null),
+          arquivadas.length
+            ? h("button.btn.btn-fantasma.btn-p", {
+                type: "button",
+                onclick: () => { bsArquivadas = !bsArquivadas; CI.app.recarregarVista(); }
+              }, ic("caixa"), `${arquivadas.length} arquivada${arquivadas.length > 1 ? "s" : ""}`)
+            : null,
+          h("button.btn.btn-fantasma.btn-p", {
+            type: "button", title: "Esconder o funil neste navegador",
+            onclick: () => { guardarFunil(false); U.aviso("Funil trancado", "info"); CI.app.recarregarVista(); }
+          }, ic("cadeado"), "Trancar")
+        )
+      ),
+      h("div.painel-bd.sem-pad", grade),
+      bsArquivadas && arquivadas.length
+        ? h("div.painel-bd", { estilo: { borderTop: "1px solid var(--line-soft)" } },
+            h("div.rotulo", { estilo: { marginBottom: "9px" } }, "arquivadas"),
+            h("div.bs-filtros", ...arquivadas.map(i => h("button.bs-filtro", {
+              type: "button", title: "Devolver ao funil, em Atração",
+              onclick: async () => {
+                try {
+                  await db.atualizar("ideias", i.id, { arquivada: false, etapa: "atracao" });
+                  U.aviso("De volta ao mural", "ok");
+                } catch (err) { U.aviso(err.message, "erro"); }
+              }
+            }, ic("recarregar"), i.titulo.slice(0, 40)))))
+        : null
+    );
+  }
+
+  function vBrainstorm() {
+    const destravado = funilAberto();
+    return h("div.view.view-brainstorm",
+      ceuCarregado(),
+      painelEnvio(),
+      painelMural(destravado),
+      painelFunil(),
+      blocoSol()
+    );
+  }
+
   return {
-    vInicio, vPainel, vCronograma, vProjetos, vProjeto, vDiretorias, vImplementacao, vIndicadores, vConfig,
+    vInicio, vPainel, vCronograma, vProjetos, vProjeto, vDiretorias, vImplementacao,
+    vIndicadores, vConfig, vBrainstorm,
     modalProjeto, modalEtapa, gavetaEtapa, buscaGlobal
   };
 })();
