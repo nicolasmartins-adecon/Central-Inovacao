@@ -90,7 +90,12 @@ CI.ui = (function () {
     bandeira:    "M4 22V4a6 6 0 0 1 8 0 6 6 0 0 0 8 0v10a6 6 0 0 1-8 0 6 6 0 0 0-8 0z",
     arrastar:    "M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01",
     tocar:       "M7.5 4.8v14.4l11.5-7.2z",
-    pausa:       "M9.5 5v14M14.5 5v14"
+    pausa:       "M9.5 5v14M14.5 5v14",
+    nuvem:       "M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z",
+    tempestade:  "M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9M13 11l-4 6h6l-4 6",
+    funil:       "M22 3H2l8 9.5V19l4 2v-8.5z",
+    cadeado:     "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4",
+    destravar:   "M5 11h14v10H5zM8 11V7a4 4 0 0 1 7.5-1.9"
   };
 
   function ic(nome, tamanho) {
@@ -207,10 +212,11 @@ CI.ui = (function () {
     requestAnimationFrame(() => cortina.classList.add("aberta"));
   }
 
-  function esconderCortina() {
+  function esconderCortina(imediato) {
     if (!cortina) return;
     cortina.classList.remove("aberta");
-    setTimeout(() => { if (cortina && !cortina.classList.contains("aberta")) cortina.hidden = true; }, 240);
+    if (imediato) cortina.hidden = true;
+    else setTimeout(() => { if (cortina && !cortina.classList.contains("aberta")) cortina.hidden = true; }, 240);
     aoFechar = null;
   }
 
@@ -259,7 +265,9 @@ CI.ui = (function () {
     if (!modalAtual) return;
     const el = modalAtual;
     modalAtual = null;
-    if (imediato) { el.remove(); return; }
+    // Fechar "na marra" (troca de tela) também tem de levar a cortina embora,
+    // senão a página fica escurecida e sem clique até recarregar.
+    if (imediato) { el.remove(); if (!gavetaAtual) esconderCortina(true); return; }
     el.classList.remove("aberto");
     if (!gavetaAtual) esconderCortina();
     setTimeout(() => el.remove(), 220);
@@ -315,7 +323,7 @@ CI.ui = (function () {
     if (!gavetaAtual) return;
     const el = gavetaAtual;
     gavetaAtual = null;
-    if (imediato) { el.remove(); return; }
+    if (imediato) { el.remove(); if (!modalAtual) esconderCortina(true); return; }
     el.classList.remove("aberta");
     if (!modalAtual) esconderCortina();
     setTimeout(() => el.remove(), 300);
@@ -362,10 +370,28 @@ CI.ui = (function () {
     return h("div.vazio", ic(icone), h("h3", titulo), texto ? h("p", texto) : null, acao || null);
   }
 
+  /* Um <label> só pode envolver UM controle. Em volta de um grupo de botões
+     (os chips de diretoria, por exemplo) o navegador repassa todo clique para
+     o primeiro botão do grupo — e a primeira diretoria da lista ficava
+     marcando e desmarcando sozinha. Por isso: label para campo único,
+     <div> com legenda para grupo. */
+  let seqCampo = 0;
+
   function campo(rotulo, controle, dica) {
-    return h("label.campo",
-      h("span", { class: "", estilo: { font: "600 10px/1 var(--f-dado)", letterSpacing: ".13em",
-                                       textTransform: "uppercase", color: "var(--muted)" } }, rotulo),
+    const unico = /^(INPUT|SELECT|TEXTAREA)$/.test((controle && controle.tagName) || "");
+    const legenda = h("span", {
+      estilo: { font: "600 10px/1 var(--f-dado)", letterSpacing: ".13em",
+                textTransform: "uppercase", color: "var(--muted)" }
+    }, rotulo);
+
+    if (!unico && controle && controle.nodeType === 1) {
+      legenda.id = "rot-" + (++seqCampo);
+      if (!controle.getAttribute("role")) controle.setAttribute("role", "group");
+      controle.setAttribute("aria-labelledby", legenda.id);
+    }
+
+    return h(unico ? "label.campo" : "div.campo",
+      legenda,
       controle,
       dica ? h("span", { estilo: { fontSize: "11px", color: "var(--faint)" } }, dica) : null
     );
@@ -478,7 +504,7 @@ CI.ui = (function () {
   }
 
   return {
-    h, anexar, limpar, ic, svgEl,
+    h, anexar, limpar, ic, svgEl, CAMINHOS,
     MESES, MESES_C, hojeISO, paraData, dataBR, dataExtenso, diasAte, relativo,
     aviso, abrirModal, fecharModal, confirmar,
     abrirGaveta, fecharGaveta, gavetaAberta,
