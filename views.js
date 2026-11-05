@@ -825,7 +825,7 @@ CI.views = (function () {
       h("div", { estilo: { display: "flex", gap: "7px", alignItems: "center", flexWrap: "wrap" } },
         botaoSeguir(p),
         h("button.btn", { type: "button", onclick: () => modalProjeto(p) }, ic("lapis"), "Editar"),
-        h("button.btn.btn-primario", { type: "button", onclick: () => modalEtapa(p.id) }, ic("mais"), "Nova etapa")
+        h("button.btn.btn-primario", { type: "button", onclick: () => modalCalendario(p.id) }, ic("cronograma"), "Calendarizar")
       )
     );
 
@@ -894,7 +894,7 @@ CI.views = (function () {
               type: "checkbox", checked: mostrarConcluidas,
               onchange: e => { mostrarConcluidas = e.target.checked; CI.app.recarregarVista(); }
             }), "mostrar concluídas"),
-          h("button.btn.btn-p", { type: "button", onclick: () => modalEtapa(p.id) }, ic("mais"), "Etapa")
+          h("button.btn.btn-p", { type: "button", onclick: () => modalCalendario(p.id) }, ic("cronograma"), "Etapa")
         )
       ),
       etapas.length > 1
@@ -907,7 +907,7 @@ CI.views = (function () {
           ? trilhaOrdenavel(p, etapas)
           : U.vazio("cronograma", "Nenhuma etapa ainda",
               "Quebre o projeto em entregas com responsável e data. É isso que alimenta o cronograma e os avisos por e-mail.",
-              h("button.btn.btn-primario", { type: "button", onclick: () => modalEtapa(p.id) }, ic("mais"), "Criar primeira etapa"))
+              h("button.btn.btn-primario", { type: "button", onclick: () => modalCalendario(p.id) }, ic("cronograma"), "Marcar a primeira entrega"))
       )
     );
 
@@ -1409,12 +1409,152 @@ CI.views = (function () {
     });
   }
 
-  function modalEtapa(projetoId, etapa) {
+  /* ---- calendarizar -------------------------------------------------------
+     Marcar as entregas de um projeto é um ato espacial: você olha o mês,
+     vê onde já tem coisa, e escolhe um dia com folga. Um campo de data não
+     mostra nada disso — por isso a etapa começa aqui, no calendário, e o
+     formulário vem depois, já com o dia escolhido.
+     ---------------------------------------------------------------------- */
+
+  const SEMANA = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+  const isoDe = (ano, mes, dia) =>
+    `${ano}-${String(mes + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+
+  function modalCalendario(projetoId) {
+    const p = db.projeto(projetoId);
+    const hoje = U.hojeISO();
+
+    /* Abre no mês que interessa: se o projeto ainda não começou, no mês de
+       início; se já está em andamento, no mês de hoje. */
+    const comecaDepois = p?.inicio && U.diasAte(p.inicio) > 0;
+    const base = U.paraData(comecaDepois ? p.inicio : hoje) || new Date();
+    let ano = base.getFullYear();
+    let mes = base.getMonth();
+
+    const rotuloMes = h("strong.cal-mes");
+    const grade = h("div.cal-grade");
+    const resumo = h("p.cal-resumo");
+
+    function irPara(delta) {
+      const d = new Date(ano, mes + delta, 1);
+      ano = d.getFullYear(); mes = d.getMonth();
+      pintar();
+    }
+
+    function abrirDia(data) {
+      U.fecharModal(true);
+      modalEtapa(projetoId, null, { data, voltarPara: () => modalCalendario(projetoId) });
+    }
+
+    function pintar() {
+      const etapas = db.etapasDe(projetoId);
+      rotuloMes.textContent = `${U.MESES[mes]} de ${ano}`;
+      U.limpar(grade);
+
+      SEMANA.forEach(d => grade.appendChild(h("span.cal-cab", d)));
+
+      const diasNoMes = new Date(ano, mes + 1, 0).getDate();
+      const antes = new Date(ano, mes, 1).getDay();        // 0 = domingo
+      const noMesAnterior = new Date(ano, mes, 0).getDate();
+
+      // fecha a primeira semana com os dias do mês anterior, apagados
+      for (let i = antes; i > 0; i--) {
+        grade.appendChild(h("span.cal-dia.fora", String(noMesAnterior - i + 1)));
+      }
+
+      let marcadasNoMes = 0;
+
+      for (let d = 1; d <= diasNoMes; d++) {
+        const data = isoDe(ano, mes, d);
+        const doDia = etapas.filter(e => String(e.data_entrega || "").slice(0, 10) === data);
+        marcadasNoMes += doDia.length;
+
+        const dentro = p?.inicio && p?.termino && data >= p.inicio && data <= p.termino;
+        const classes = ".cal-dia" +
+          (data === hoje ? ".hoje" : "") +
+          (data < hoje ? ".passado" : "") +
+          (dentro ? ".dentro" : "") +
+          (doDia.length ? ".ocupado" : "");
+
+        const celula = h("button" + classes, {
+          type: "button",
+          title: doDia.length
+            ? `${U.dataBR(data)} — ${doDia.length} etapa${doDia.length > 1 ? "s" : ""} marcada${doDia.length > 1 ? "s" : ""}`
+            : `Marcar uma entrega em ${U.dataBR(data)}`,
+          onclick: ev => { if (!ev.target.closest(".cal-etapa")) abrirDia(data); }
+        },
+          h("span.cal-n", String(d)),
+          doDia.length
+            ? h("span.cal-etapas", ...doDia.slice(0, 3).map(e => h("i.cal-etapa" + (e.concluida ? ".feita" : ""), {
+                title: `Etapa ${e.numero}: ${e.descricao || "sem descrição"}`,
+                onclick: ev => {
+                  ev.stopPropagation();
+                  U.fecharModal(true);
+                  modalEtapa(projetoId, e, { voltarPara: () => modalCalendario(projetoId) });
+                }
+              }, String(e.numero))),
+              doDia.length > 3 ? h("i.cal-mais", `+${doDia.length - 3}`) : null)
+            : null
+        );
+        grade.appendChild(celula);
+      }
+
+      // completa a última semana, para a grade não ficar torta
+      const preenchidas = antes + diasNoMes;
+      const sobra = (7 - (preenchidas % 7)) % 7;
+      for (let i = 1; i <= sobra; i++) grade.appendChild(h("span.cal-dia.fora", String(i)));
+
+      const semData = etapas.filter(e => !e.data_entrega).length;
+      resumo.textContent = [
+        marcadasNoMes
+          ? `${marcadasNoMes} entrega${marcadasNoMes > 1 ? "s" : ""} neste mês`
+          : "Nenhuma entrega marcada neste mês",
+        `${etapas.length} etapa${etapas.length === 1 ? "" : "s"} no projeto`,
+        semData ? `${semData} ainda sem data` : null
+      ].filter(Boolean).join(" · ");
+    }
+
+    pintar();
+
+    U.abrirModal({
+      sub: "Calendarizar",
+      titulo: p?.nome || "Projeto",
+      largura: 620,
+      corpo: [
+        h("div.cal-topo",
+          h("button.btn.btn-fantasma.btn-icone.btn-p", {
+            type: "button", "aria-label": "Mês anterior", onclick: () => irPara(-1)
+          }, ic("setaEsq")),
+          rotuloMes,
+          h("button.btn.btn-fantasma.btn-icone.btn-p", {
+            type: "button", "aria-label": "Próximo mês", onclick: () => irPara(1)
+          }, ic("setaDir")),
+          h("button.btn.btn-p", {
+            type: "button", estilo: { marginLeft: "auto" },
+            onclick: () => { const d = new Date(); ano = d.getFullYear(); mes = d.getMonth(); pintar(); }
+          }, "Hoje")
+        ),
+        grade,
+        resumo,
+        h("p.cal-dica", ic("cronograma"),
+          h("span", "Clique num dia para marcar uma entrega. ",
+            p?.inicio && p?.termino
+              ? h("span", "A faixa iluminada é a janela do projeto: ",
+                  h("strong", `${U.dataBR(p.inicio)} a ${U.dataBR(p.termino)}`), ".")
+              : h("span", "Defina início e término do projeto para ver a janela destacada aqui.")))
+      ],
+      acoes: [
+        h("button.btn", { type: "button", onclick: () => U.fecharModal() }, "Fechar")
+      ]
+    });
+  }
+
+  function modalEtapa(projetoId, etapa, opcoes = {}) {
     const editando = Boolean(etapa);
     const existentes = db.etapasDe(projetoId);
     const e = etapa || {
       numero: existentes.length + 1, descricao: "", responsavel: "",
-      responsavel_email: "", data_entrega: ""
+      responsavel_email: "", data_entrega: opcoes.data || ""
     };
 
     const fNumero = entrada({ type: "number", step: "0.5", value: e.numero, estilo: { maxWidth: "110px" } });
@@ -1423,11 +1563,19 @@ CI.views = (function () {
     const fEmail = entrada({ type: "email", value: e.responsavel_email || "", placeholder: "nome@adecon.com.br" });
     const fData = entrada({ type: "date", value: (e.data_entrega || "").slice(0, 10) });
 
+    const voltar = typeof opcoes.voltarPara === "function" ? opcoes.voltarPara : null;
+
     U.abrirModal({
       sub: editando ? "Editar etapa" : "Nova etapa",
       titulo: db.projeto(projetoId)?.nome || "Projeto",
       largura: 560,
       corpo: [
+        /* Vindo do calendário, o dia escolhido abre o card: confirma a escolha
+           sem obrigar a reler o campo de data lá embaixo. */
+        !editando && opcoes.data
+          ? h("p.etapa-dia", ic("cronograma"),
+              h("span", "Entrega em ", h("strong", U.dataExtenso(opcoes.data)), ". Dá para mudar abaixo."))
+          : null,
         h("div.linha-campos",
           campo("Nº", fNumero),
           campo("Data de entrega", fData)
@@ -1450,7 +1598,10 @@ CI.views = (function () {
               }
             }, ic("lixeira"), "Excluir")
           : null,
-        h("button.btn", { type: "button", onclick: () => U.fecharModal() }, "Cancelar"),
+        h("button.btn", {
+          type: "button",
+          onclick: () => { U.fecharModal(true); if (voltar) voltar(); else U.fecharModal(); }
+        }, voltar ? ic("setaEsq") : null, voltar ? "Voltar ao calendário" : "Cancelar"),
         h("button.btn.btn-primario", {
           type: "button",
           onclick: async () => {
@@ -1468,8 +1619,11 @@ CI.views = (function () {
               if (editando) { await db.atualizar("etapas", e.id, dados); U.aviso("Etapa atualizada", "ok"); }
               else { await db.criar("etapas", Object.assign({ concluida: false }, dados)); U.aviso("Etapa criada", "ok"); }
               if (dados.responsavel_email) db.dispararEmails();
-              U.fecharModal();
               CI.app.recarregarVista();
+              /* Quem veio calendarizar quase nunca marca uma etapa só: volta
+                 para o mês, com a entrega recém-criada já no lugar. */
+              U.fecharModal(true);
+              if (voltar) voltar(); else U.fecharModal();
             } catch (err) { U.aviso("Não salvou: " + err.message, "erro"); }
           }
         }, ic("check"), editando ? "Salvar" : "Adicionar etapa")
@@ -1745,6 +1899,26 @@ CI.views = (function () {
      ====================================================================== */
 
   function vIndicadores() {
+    /* Os indicadores medem o desempenho das diretorias. Número de desempenho
+       lido fora de contexto vira fofoca, então esta tela fica atrás da mesma
+       senha do funil. */
+    if (!areaAberta()) {
+      return h("div.view",
+        h("section.painel",
+          h("div.painel-hd", h("h2", "Indicadores"), h("div.acoes", chip("restrito"))),
+          h("div.painel-bd",
+            portao({
+              titulo: "Os indicadores são da diretoria",
+              texto: "Aqui ficam TIP, ISD, Inovação e o cumprimento de prazo por diretoria — " +
+                     "números de desempenho, que fazem sentido junto com o contexto de cada área. " +
+                     "É a mesma senha do funil, e fica destravado neste navegador depois da primeira vez.",
+              aviso: "Indicadores destravados neste navegador"
+            })
+          )
+        )
+      );
+    }
+
     const impl = db.dados.implementacoes;
     const implementados = impl.filter(i => i.status === "Implementado").length;
     const tip = impl.length ? Math.round((implementados / impl.length) * 100) : 0;
@@ -1935,7 +2109,9 @@ CI.views = (function () {
             : h("p.discreto", { estilo: { fontSize: "12.5px" } },
                 "Lance as notas do formulário de satisfação para o ISD sair do zero.")
         )
-      )
+      ),
+      h("div", { estilo: { display: "flex", justifyContent: "flex-end", marginTop: "14px" } },
+        botaoTrancar("Indicadores"))
     );
   }
 
@@ -2746,11 +2922,57 @@ CI.views = (function () {
     catch (err) { U.aviso("Não deu para registrar: " + err.message, "erro"); }
   }
 
-  function funilAberto() {
+  /* ---- áreas restritas ----------------------------------------------------
+     O funil e os indicadores usam a mesma senha e a mesma chave: destravar um
+     destrava o outro. Quem já tinha aberto o funil não precisa digitar de novo
+     — a chave guardada continua sendo "ci:funil".
+
+     Isto é uma cortina, não um cofre: esconde as telas de quem só quer usar o
+     site, mas quem souber mexer no navegador alcança os dados pela API. Para
+     fechar de verdade, a trava teria que estar no banco, por pessoa.
+     ---------------------------------------------------------------------- */
+
+  function areaAberta() {
     try { return localStorage.getItem("ci:funil") === "1"; } catch (_) { return false; }
   }
-  function guardarFunil(aberto) {
+  function guardarArea(aberto) {
     try { aberto ? localStorage.setItem("ci:funil", "1") : localStorage.removeItem("ci:funil"); } catch (_) {}
+  }
+
+  /** O cadeado, igual nas duas telas: título, explicação e campo de senha. */
+  function portao({ titulo, texto, aviso }) {
+    const fSenha = entrada({
+      type: "password", inputmode: "numeric", maxlength: 8, autocomplete: "off",
+      "aria-label": "Senha da área restrita",
+      onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); tentar(); } }
+    });
+    function tentar() {
+      if (fSenha.value.trim() !== SENHA_FUNIL) {
+        U.aviso("Senha incorreta.", "erro");
+        fSenha.value = ""; fSenha.focus();
+        return;
+      }
+      guardarArea(true);
+      U.aviso(aviso || "Destravado neste navegador", "ok");
+      CI.app.recarregarVista();
+    }
+    return h("div.bs-tranca",
+      ic("cadeado"),
+      h("h3", titulo),
+      h("p", texto),
+      h("div.bs-tranca-form",
+        fSenha,
+        h("button.btn.btn-primario", { type: "button", onclick: tentar }, ic("destravar"), "Destravar")
+      )
+    );
+  }
+
+  /** Botão de trancar de volta, para o rodapé das telas restritas. */
+  function botaoTrancar(oQue) {
+    return h("button.btn.btn-fantasma.btn-p", {
+      type: "button",
+      onclick: () => { guardarArea(false); U.aviso(`${oQue} trancado`, "info"); CI.app.recarregarVista(); }
+    }, ic("cadeado"), "Trancar");
   }
 
   /* ---- a nuvem carregada ---------------------------------------------------
@@ -3757,7 +3979,7 @@ CI.views = (function () {
   function gavetaIdeia(ideiaId) {
     const i = db.dados.ideias.find(x => x.id === ideiaId);
     if (!i) return;
-    const podeEditar = funilAberto();
+    const podeEditar = areaAberta();
     const nat = NAT(i);
     const et = ETAPA(i.etapa);
 
@@ -3974,36 +4196,18 @@ CI.views = (function () {
   }
 
   function painelFunil() {
-    if (!funilAberto()) {
-      const fSenha = entrada({
-        type: "password", inputmode: "numeric", maxlength: 8, autocomplete: "off",
-        "aria-label": "Senha do funil",
-        onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); tentar(); } }
-      });
-      function tentar() {
-        if (fSenha.value.trim() !== SENHA_FUNIL) {
-          U.aviso("Senha incorreta.", "erro");
-          fSenha.value = ""; fSenha.focus();
-          return;
-        }
-        guardarFunil(true);
-        U.aviso("Funil destravado neste navegador", "ok");
-        CI.app.recarregarVista();
-      }
+    if (!areaAberta()) {
       return h("section.painel",
         h("div.painel-hd", h("h2", "Funil de inovação"), h("div.acoes", chip("restrito"))),
         h("div.painel-bd",
-          h("div.bs-tranca",
-            ic("cadeado"),
-            h("h3", "O funil é da equipe de inovação"),
-            h("p", "Aqui as ideias e os problemas passam por atração, qualificação e " +
+          portao({
+            titulo: "O funil é da equipe de inovação",
+            texto: "Aqui as ideias e os problemas passam por atração, qualificação e " +
                    "fechamento até virarem projeto. Quem publica no mural não precisa ver " +
-                   "esta parte — e ela fica destravada neste navegador depois da primeira vez."),
-            h("div.bs-tranca-form",
-              fSenha,
-              h("button.btn.btn-primario", { type: "button", onclick: tentar }, ic("destravar"), "Destravar")
-            )
-          )
+                   "esta parte — e ela fica destravada neste navegador depois da primeira vez. " +
+                   "A mesma senha abre os Indicadores.",
+            aviso: "Funil destravado neste navegador"
+          })
         )
       );
     }
@@ -4043,10 +4247,7 @@ CI.views = (function () {
                 onclick: () => { bsArquivadas = !bsArquivadas; CI.app.recarregarVista(); }
               }, ic("caixa"), `${arquivadas.length} arquivada${arquivadas.length > 1 ? "s" : ""}`)
             : null,
-          h("button.btn.btn-fantasma.btn-p", {
-            type: "button", title: "Esconder o funil neste navegador",
-            onclick: () => { guardarFunil(false); U.aviso("Funil trancado", "info"); CI.app.recarregarVista(); }
-          }, ic("cadeado"), "Trancar")
+          botaoTrancar("Funil")
         )
       ),
       h("div.painel-bd.sem-pad", grade),
@@ -4067,7 +4268,7 @@ CI.views = (function () {
   }
 
   function vBrainstorm() {
-    const destravado = funilAberto();
+    const destravado = areaAberta();
     return h("div.view.view-brainstorm",
       ceuCarregado(),
       painelEnvio(),
@@ -4080,7 +4281,7 @@ CI.views = (function () {
   return {
     vInicio, vPainel, vCronograma, vProjetos, vProjeto, vDiretorias, vImplementacao,
     vIndicadores, vConfig, vBrainstorm,
-    modalProjeto, modalEtapa, gavetaEtapa, gavetaIdeia, buscaGlobal,
+    modalProjeto, modalEtapa, modalCalendario, gavetaEtapa, gavetaIdeia, buscaGlobal,
     /* regras puras, expostas para poderem ser conferidas de fora */
     veredito, ehPrivada
   };
